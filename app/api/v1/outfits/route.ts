@@ -81,9 +81,10 @@ export async function POST(request: Request) {
     await db.insert(outfits).values({
       id: outfitId,
       ownerId: identity.ownerId,
-      name: manualOutfitName(selectedGarments),
-      occasion: "Creado por ti",
-      rationale: `Combinación creada en el probador con ${selectedGarments.length} ${selectedGarments.length === 1 ? "prenda" : "prendas"}.`,
+      name: cleanLabel(body?.name, 80) || manualOutfitName(selectedGarments),
+      occasion: cleanLabel(body?.occasion, 40) || "Creado por ti",
+      rationale: cleanLabel(body?.rationale, 240)
+        || `Combinación creada en el probador con ${selectedGarments.length} ${selectedGarments.length === 1 ? "prenda" : "prendas"}.`,
       piecesSnapshotJson: JSON.stringify(selectedGarments.map(snapshotGarment)),
       avatarVersion: owner?.avatarVersion || null,
       status: "saved",
@@ -237,12 +238,26 @@ async function listOwnerOutfits(ownerId: string) {
   });
 }
 
-async function safeJson(request: Request): Promise<{ count?: number; garmentIds?: unknown } | null> {
+type OutfitRequest = {
+  count?: number;
+  garmentIds?: unknown;
+  name?: unknown;
+  occasion?: unknown;
+  rationale?: unknown;
+};
+
+async function safeJson(request: Request): Promise<OutfitRequest | null> {
   try {
-    return await request.json() as { count?: number; garmentIds?: unknown };
+    return await request.json() as OutfitRequest;
   } catch {
     return null;
   }
+}
+
+function cleanLabel(value: unknown, maxLength: number) {
+  if (typeof value !== "string") return null;
+  const cleaned = value.replace(/\s+/gu, " ").trim();
+  return cleaned ? cleaned.slice(0, maxLength) : null;
 }
 
 function manualOutfitName(selectedGarments: Array<{ color: string | null; type: string; name: string }>) {
