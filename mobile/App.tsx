@@ -408,18 +408,19 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ photos: manifest, originalsPolicy: "retain_private" }),
       });
-      if (!batchResponse.ok) throw new Error("batch_failed");
+      if (!batchResponse.ok) throw await uploadError("batch", batchResponse);
       const batch = await batchResponse.json() as { batchId: string; photos: Array<{ id: string; uploadPath: string }> };
 
       for (let index = 0; index < photos.length; index += 1) {
         const fileResponse = await fetch(photos[index].uri);
+        if (!fileResponse.ok) throw new Error(`local_photo_${index + 1}_${fileResponse.status}`);
         const blob = await fileResponse.blob();
         const uploadResponse = await cloudFetch(cloudSession, batch.photos[index].uploadPath, {
           method: "PUT",
           headers: { "Content-Type": manifest[index].contentType },
           body: blob,
         });
-        if (!uploadResponse.ok) throw new Error("upload_failed");
+        if (!uploadResponse.ok) throw await uploadError(`photo_${index + 1}`, uploadResponse);
         setUploadProgress(Math.round(((index + 1) / photos.length) * 100));
       }
 
@@ -451,8 +452,21 @@ export default function App() {
           { text: "Máxima precisión", onPress: () => startProcessing(batch.batchId, "quality") },
         ],
       );
-    } catch {
-      Alert.alert("La subida se interrumpió", "Tus fotos locales siguen intactas. Puedes intentarlo otra vez.");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "unknown";
+      if (detail.includes("_401_") || detail.includes("_403_")) {
+        await Promise.all(Object.values(cloudKeys).map((key) => SecureStore.deleteItemAsync(key)));
+        setCloudSession(null);
+        automaticCloudConnectionStarted.current = true;
+        setPairing(true);
+        Linking.openURL(CLOUD_CONNECT_URL).catch(() => {
+          automaticCloudConnectionStarted.current = false;
+          setPairing(false);
+        });
+        Alert.alert("Actualizando tu cuenta", "La credencial privada había expirado. Vesta la está renovando automáticamente; tus fotos siguen en el teléfono.");
+      } else {
+        Alert.alert("La subida se interrumpió", `Tus fotos locales siguen intactas. Detalle técnico: ${detail}`);
+      }
     } finally {
       setUploading(false);
     }
@@ -985,6 +999,17 @@ function cloudFetch(session: CloudSession, path: string, init: RequestInit) {
   headers.set("OAI-Sites-Authorization", `Bearer ${session.dispatchToken}`);
   headers.set("x-vesta-device-token", session.deviceToken);
   return fetch(`${session.apiUrl}${path}`, { ...init, headers });
+}
+
+async function uploadError(stage: string, response: Response) {
+  let serverCode = "unknown";
+  try {
+    const payload = await response.json() as { error?: string };
+    if (payload.error) serverCode = payload.error;
+  } catch {
+    // The status and stage still identify the failed request.
+  }
+  return new Error(`${stage}_${response.status}_${serverCode}`);
 }
 
 function authorizedImageSource(session: CloudSession, path: string) {
