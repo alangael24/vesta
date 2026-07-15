@@ -56,6 +56,15 @@ export type ExperimentalInventoryAnalysis = {
 
 export type ExperimentalGarmentCandidate = ExperimentalInventoryResult["garments"][number];
 
+export type ExperimentalTryOnGarment = {
+  name: string;
+  type: string;
+  color: string;
+  description?: string;
+  placement: "head" | "upper_body" | "outer_layer" | "lower_body" | "feet" | "accessory";
+  imageBase64: string;
+};
+
 const inventorySchema = {
   type: "object",
   additionalProperties: false,
@@ -194,6 +203,41 @@ export async function generateExperimentalGarmentImage(
   if (!response.ok) throw new Error(payload.error?.message || `image_edit_${response.status}`);
   const result = payload.data?.[0]?.b64_json;
   if (!result) throw new Error("image_edit_empty");
+  return result;
+}
+
+export async function generateExperimentalTryOnImage(
+  avatarBase64: string,
+  garments: ExperimentalTryOnGarment[],
+  quality: "low" | "medium" = "low",
+) {
+  if (!garments.length) throw new Error("try_on_garments_missing");
+  const garmentList = garments.map((garment, index) => (
+    `Image ${index + 2}: ${garment.name}; placement=${garment.placement}; type=${garment.type}; color=${garment.color}; details=${garment.description || "preserve only visible details"}.`
+  )).join("\n");
+  const prompt = `Use case: identity-preserve virtual try-on.
+Image 1 is the exact base avatar and must remain the same person. Images 2 onward are isolated reference garments.
+${garmentList}
+
+Create one photorealistic full-body fashion fitting image in which the person from Image 1 is actually wearing every referenced garment in its specified anatomical placement. This must be a genuine image edit, not a collage or overlay: make fabric wrap around the body, follow the shoulders, chest, waist, hips, legs, head, or feet as appropriate, with realistic drape, folds, seams, sleeve openings, occlusion, scale, perspective, and contact shadows. Replace the neutral base clothing only where a selected garment belongs; keep neutral base clothing in unselected body regions.
+
+Preserve the person's identity, face, hair, skin tone, body shape and proportions, standing pose, hands, feet, camera angle, framing, lighting, and warm solid background from Image 1. Preserve each garment's real color, silhouette, material cues, graphics, logos, patterns, trim, pockets, and construction exactly as supported by its reference image. Do not invent or alter branding. Do not show any floating garment, catalog cutout, duplicated clothing, mannequin, hanger, phone, text, extra person, extra limb, or extra object. Output only the finished full-body portrait.`;
+  const response = await codexImageEdit({
+    images: [
+      { image_url: `data:image/jpeg;base64,${avatarBase64}` },
+      ...garments.map((garment) => ({ image_url: `data:image/png;base64,${garment.imageBase64}` })),
+    ],
+    prompt,
+    background: "opaque",
+    moderation: "low",
+    model: "gpt-image-2",
+    quality,
+    size: "1024x1536",
+  });
+  const payload = await response.json() as { data?: Array<{ b64_json?: string }>; error?: { message?: string; code?: string } };
+  if (!response.ok) throw new Error(payload.error?.code || payload.error?.message || `try_on_image_edit_${response.status}`);
+  const result = payload.data?.[0]?.b64_json;
+  if (!result) throw new Error("try_on_image_edit_empty");
   return result;
 }
 

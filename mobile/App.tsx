@@ -14,6 +14,7 @@ import {
   LayoutChangeEvent,
   Linking,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   SafeAreaView,
@@ -34,6 +35,7 @@ import {
   EXPERIMENTAL_CODEX_MODEL,
   ExperimentalPhoto,
   generateExperimentalGarmentImage,
+  generateExperimentalTryOnImage,
 } from "./experimental-inventory";
 
 type ViewName = "closet" | "builder" | "looks";
@@ -62,11 +64,25 @@ type WardrobeItem = {
 };
 
 type Outfit = {
-  id: number;
+  id: string;
   name: string;
   occasion: string;
   note: string;
+  status?: string;
+  pieces: WardrobeItem[];
 };
+
+type TryOnLayer = {
+  key: string;
+  item: WardrobeItem;
+};
+
+type TryOnRenderQuality = "low" | "medium";
+
+type BodyRegion = "head" | "torso" | "legs" | "feet";
+type FittingSlot = "head" | "top" | "outer" | "legs" | "feet" | "accessory";
+type WindowBounds = { x: number; y: number; width: number; height: number };
+type WardrobeDrag = { item: WardrobeItem; x: number; y: number; overCanvas: boolean };
 
 type CloudSession = {
   apiUrl: string;
@@ -102,11 +118,14 @@ const cloudKeys = {
   deviceId: "vesta.device-id",
 };
 const CLOUD_CONNECT_URL = "https://vesta-armario-alan.alangael2411.chatgpt.site/api/v1/pairing";
+const TRY_ON_RENDER_PREFIX = "vesta-try-on-render";
+
+function tryOnSignatureFor(layers: TryOnLayer[]) {
+  return layers.map((layer) => `${layer.item.id}:${layer.item.imagePath || ""}`).join("|");
+}
 
 const wardrobeSprite = require("./assets/wardrobe-sprite.png") as ImageSourcePropType;
-const outfitSprite = require("./assets/outfit-sprite.png") as ImageSourcePropType;
-
-const outfits: Outfit[] = [];
+const alanAvatarBase = require("./assets/alan-avatar-base.jpg") as ImageSourcePropType;
 
 const filters: { id: Category; label: string }[] = [
   { id: "all", label: "Todo" },
@@ -115,8 +134,6 @@ const filters: { id: Category; label: string }[] = [
   { id: "bottoms", label: "Abajo" },
   { id: "accessories", label: "Accesorios" },
 ];
-
-const occasions = ["Diario", "Trabajo", "Cena", "Viaje"];
 
 function Sprite({
   source,
@@ -167,6 +184,108 @@ function GarmentVisual({ item, session }: { item: WardrobeItem; session: CloudSe
   return <Sprite source={wardrobeSprite} index={item.spriteIndex ?? Number(item.id)} columns={4} rows={4} />;
 }
 
+function OutfitVisual({ outfit, session }: { outfit: Outfit; session: CloudSession | null }) {
+  return (
+    <View style={styles.outfitCollage}>
+      {outfit.pieces.slice(0, 4).map((piece, index) => (
+        <View
+          key={String(piece.id)}
+          style={[
+            styles.outfitCollageCell,
+            { left: index % 2 === 0 ? "0%" : "50%", top: index < 2 ? "0%" : "50%" },
+          ]}
+        >
+          {piece.imagePath && session
+            ? <Image source={authorizedImageSource(session, piece.imagePath)} resizeMode="contain" style={styles.outfitCollageImage} />
+            : <Text style={styles.outfitCollageFallback}>✦</Text>}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function fittingSlotFor(item: WardrobeItem): FittingSlot {
+  const descriptor = `${item.type} ${item.name} ${item.description || ""}`.toLowerCase();
+  if (/(gorra|cachucha|sombrero|beanie|bucket|\bcap\b|\bhat\b)/u.test(descriptor)) return "head";
+  if (/(zapato|tenis|shoe|sneaker|bota|calzado)/u.test(descriptor)) return "feet";
+  if (item.category === "bottoms") return "legs";
+  if (item.category === "layers") return "outer";
+  if (item.category === "tops") return "top";
+  return "accessory";
+}
+
+function bodyRegionFor(item: WardrobeItem): BodyRegion {
+  const slot = fittingSlotFor(item);
+  if (slot === "head") return "head";
+  if (slot === "feet") return "feet";
+  if (slot === "legs") return "legs";
+  return "torso";
+}
+
+function imagePlacementFor(item: WardrobeItem) {
+  const slot = fittingSlotFor(item);
+  if (slot === "head") return "head" as const;
+  if (slot === "top") return "upper_body" as const;
+  if (slot === "outer") return "outer_layer" as const;
+  if (slot === "legs") return "lower_body" as const;
+  if (slot === "feet") return "feet" as const;
+  return "accessory" as const;
+}
+
+function bodyRegionLabel(region: BodyRegion) {
+  if (region === "head") return "SUELTA EN LA CABEZA";
+  if (region === "legs") return "SUELTA EN LAS PIERNAS";
+  if (region === "feet") return "SUELTA EN LOS PIES";
+  return "SUELTA EN EL TORSO";
+}
+
+function DraggableTryOnRailItem({
+  item,
+  session,
+  active,
+  onPress,
+  onDragStart,
+  onDragMove,
+  onDragEnd,
+}: {
+  item: WardrobeItem;
+  session: CloudSession | null;
+  active: boolean;
+  onPress: () => void;
+  onDragStart: (item: WardrobeItem, x: number, y: number) => void;
+  onDragMove: (x: number, y: number) => void;
+  onDragEnd: (item: WardrobeItem, x: number, y: number) => void;
+}) {
+  const suppressTapUntil = useRef(0);
+  const panResponder = useRef(PanResponder.create({
+    onStartShouldSetPanResponder: () => false,
+    onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dy) > 7 && Math.abs(gesture.dy) > Math.abs(gesture.dx) * 0.8,
+    onPanResponderGrant: (_, gesture) => {
+      suppressTapUntil.current = Date.now() + 700;
+      onDragStart(item, gesture.x0, gesture.y0);
+    },
+    onPanResponderMove: (_, gesture) => onDragMove(gesture.moveX, gesture.moveY),
+    onPanResponderRelease: (_, gesture) => onDragEnd(item, gesture.moveX, gesture.moveY),
+    onPanResponderTerminate: (_, gesture) => onDragEnd(item, gesture.moveX, gesture.moveY),
+  })).current;
+
+  return (
+    <Pressable
+      {...panResponder.panHandlers}
+      style={[styles.tryOnRailItem, active && styles.tryOnRailItemActive]}
+      onPress={() => {
+        if (Date.now() >= suppressTapUntil.current) onPress();
+      }}
+      accessibilityLabel={`Probar ${item.name}`}
+      accessibilityHint="Toca para colocar o arrastra hacia la zona iluminada del cuerpo"
+    >
+      <GarmentVisual item={item} session={session} />
+      <Text style={styles.tryOnRailLabel} numberOfLines={1}>{item.name}</Text>
+      <View style={styles.dragAffordance}><Text style={styles.dragAffordanceText}>↕</Text></View>
+    </Pressable>
+  );
+}
+
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -192,10 +311,24 @@ export default function App() {
   const [experimentalProgress, setExperimentalProgress] = useState(0);
   const [reconstructingId, setReconstructingId] = useState<ItemId | null>(null);
   const [cloudWardrobe, setCloudWardrobe] = useState<WardrobeItem[]>([]);
+  const [outfits, setOutfits] = useState<Outfit[]>([]);
+  const [outfitsLoading, setOutfitsLoading] = useState(false);
+  const [outfitGenerating, setOutfitGenerating] = useState(false);
   const [duplicateCount, setDuplicateCount] = useState(0);
   const [wardrobeLoading, setWardrobeLoading] = useState(false);
-  const [builderItems, setBuilderItems] = useState<ItemId[]>([2, 9]);
-  const [occasion, setOccasion] = useState("Diario");
+  const [tryOnLayers, setTryOnLayers] = useState<TryOnLayer[]>([]);
+  const [tryOnRendering, setTryOnRendering] = useState(false);
+  const [tryOnRenderingQuality, setTryOnRenderingQuality] = useState<TryOnRenderQuality>("low");
+  const [tryOnResultQuality, setTryOnResultQuality] = useState<TryOnRenderQuality | null>(null);
+  const [tryOnRenderedUri, setTryOnRenderedUri] = useState<string | null>(null);
+  const [tryOnRenderedSignature, setTryOnRenderedSignature] = useState<string | null>(null);
+  const [wardrobeDrag, setWardrobeDrag] = useState<WardrobeDrag | null>(null);
+  const appRootRef = useRef<View | null>(null);
+  const appRootWindow = useRef({ x: 0, y: 0 });
+  const tryOnCanvasRef = useRef<View | null>(null);
+  const tryOnCanvasWindow = useRef<WindowBounds | null>(null);
+  const tryOnAvatarBase64 = useRef<string | null>(null);
+  const tryOnGarmentBase64 = useRef(new Map<string, string>());
   const automaticCloudConnectionStarted = useRef(false);
   const pendingAnalysisOffered = useRef(false);
 
@@ -299,9 +432,10 @@ export default function App() {
   useEffect(() => {
     if (!cloudSession) {
       setCloudWardrobe([]);
+      setOutfits([]);
       return;
     }
-    loadWardrobe(cloudSession).catch(() => undefined);
+    Promise.all([loadWardrobe(cloudSession), loadOutfits(cloudSession)]).catch(() => undefined);
   }, [cloudSession?.apiUrl, cloudSession?.deviceToken]);
 
   async function loadWardrobe(session = cloudSession) {
@@ -320,6 +454,56 @@ export default function App() {
       return items;
     } finally {
       setWardrobeLoading(false);
+    }
+  }
+
+  async function loadOutfits(session = cloudSession) {
+    if (!session) return;
+    setOutfitsLoading(true);
+    try {
+      const response = await cloudFetch(session, "/api/v1/outfits", { method: "GET" });
+      if (!response.ok) return;
+      const result = await response.json() as { outfits?: Array<Omit<Outfit, "pieces"> & { pieces: CloudGarment[] }> };
+      setOutfits((result.outfits || []).map((outfit) => ({
+        ...outfit,
+        pieces: outfit.pieces.map((piece) => ({ ...piece, category: categoryForUi(piece.category) })),
+      })));
+    } finally {
+      setOutfitsLoading(false);
+    }
+  }
+
+  async function generateSavedOutfits() {
+    if (!cloudSession || outfitGenerating) return;
+    setOutfitGenerating(true);
+    try {
+      const response = await cloudFetch(cloudSession, "/api/v1/outfits", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ count: 3 }),
+      });
+      const result = await response.json() as { outfits?: Array<Omit<Outfit, "pieces"> & { pieces: CloudGarment[] }>; created?: number; error?: string };
+      if (result.outfits) {
+        setOutfits(result.outfits.map((outfit) => ({
+          ...outfit,
+          pieces: outfit.pieces.map((piece) => ({ ...piece, category: categoryForUi(piece.category) })),
+        })));
+      }
+      if (!response.ok) {
+        if (result.error === "outfit_wardrobe_too_small") {
+          Alert.alert("Faltan prendas", "Vesta necesita al menos una prenda de arriba y un pantalón con recorte listo.");
+        } else if (result.error === "outfit_combinations_exhausted") {
+          Alert.alert("Ya encontraste todas", "No quedan combinaciones nuevas con las prendas que están listas ahora mismo.");
+        } else {
+          throw new Error(result.error || "outfit_generation_failed");
+        }
+        return;
+      }
+      Alert.alert("Looks guardados", `${result.created || 0} outfits nuevos se sincronizaron con tu nube privada.`);
+    } catch {
+      Alert.alert("No se crearon los Looks", "Tu armario sigue intacto. Vuelve a intentarlo cuando la cuenta esté sincronizada.");
+    } finally {
+      setOutfitGenerating(false);
     }
   }
 
@@ -757,18 +941,210 @@ export default function App() {
     }
   };
 
-  const toggleBuilderItem = (id: ItemId) => {
-    setBuilderItems((current) => {
-      if (current.includes(id)) return current.filter((value) => value !== id);
-      if (current.length >= 3) return [...current.slice(1), id];
-      return [...current, id];
+  const renderRealTryOn = async (
+    layers: TryOnLayer[],
+    previousLayers: TryOnLayer[],
+    quality: TryOnRenderQuality = "low",
+  ) => {
+    if (!cloudSession || !FileSystem.cacheDirectory || !FileSystem.documentDirectory) return;
+    setTryOnRenderingQuality(quality);
+    setTryOnRendering(true);
+    const temporaryPaths: string[] = [];
+    try {
+      if (!tryOnAvatarBase64.current) {
+        const avatarAsset = Image.resolveAssetSource(alanAvatarBase);
+        tryOnAvatarBase64.current = await FileSystem.readAsStringAsync(avatarAsset.uri, { encoding: FileSystem.EncodingType.Base64 });
+      }
+      const garmentInputs = [];
+      for (const layer of layers) {
+        const cacheKey = `${layer.item.id}:${layer.item.imagePath}`;
+        let imageBase64 = tryOnGarmentBase64.current.get(cacheKey);
+        if (!imageBase64) {
+          const localPath = `${FileSystem.cacheDirectory}${TRY_ON_RENDER_PREFIX}-${layer.item.id}.png`;
+          await FileSystem.deleteAsync(localPath, { idempotent: true }).catch(() => undefined);
+          const download = await FileSystem.downloadAsync(`${cloudSession.apiUrl}${layer.item.imagePath}`, localPath, {
+            headers: {
+              "OAI-Sites-Authorization": `Bearer ${cloudSession.dispatchToken}`,
+              "x-vesta-device-token": cloudSession.deviceToken,
+            },
+            sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
+          });
+          if (download.status < 200 || download.status >= 300) throw new Error(`try_on_garment_download_${download.status}`);
+          temporaryPaths.push(download.uri);
+          imageBase64 = await FileSystem.readAsStringAsync(download.uri, { encoding: FileSystem.EncodingType.Base64 });
+          if (tryOnGarmentBase64.current.size >= 12) {
+            const oldestKey = tryOnGarmentBase64.current.keys().next().value;
+            if (oldestKey) tryOnGarmentBase64.current.delete(oldestKey);
+          }
+          tryOnGarmentBase64.current.set(cacheKey, imageBase64);
+        }
+        garmentInputs.push({
+          name: layer.item.name,
+          type: layer.item.type,
+          color: layer.item.color,
+          description: layer.item.description,
+          placement: imagePlacementFor(layer.item),
+          imageBase64,
+        });
+      }
+      const result = await generateExperimentalTryOnImage(tryOnAvatarBase64.current, garmentInputs, quality);
+      const outputPath = `${FileSystem.documentDirectory}${TRY_ON_RENDER_PREFIX}-${Date.now()}.png`;
+      await FileSystem.writeAsStringAsync(outputPath, result, { encoding: FileSystem.EncodingType.Base64 });
+      const previousRender = tryOnRenderedUri;
+      setTryOnRenderedUri(outputPath);
+      setTryOnRenderedSignature(tryOnSignatureFor(layers));
+      setTryOnResultQuality(quality);
+      if (previousRender?.startsWith("file:")) {
+        await FileSystem.deleteAsync(previousRender, { idempotent: true }).catch(() => undefined);
+      }
+    } catch (error) {
+      setTryOnLayers(previousLayers);
+      const detail = error instanceof Error ? error.message : "unknown";
+      if (/codex_not_connected|token_refresh|401/u.test(detail)) {
+        setCodexConnected(false);
+        Alert.alert("Vuelve a conectar ChatGPT", "La sesión experimental expiró. Reconéctala desde tu perfil y vuelve a soltar la prenda.");
+      } else if (detail === "moderation_blocked") {
+        Alert.alert("No se pudo crear esta prueba", "La generación fue detenida por una comprobación de seguridad. Tu avatar y tus prendas siguen intactos.");
+      } else {
+        Alert.alert("La prueba realista no terminó", `No se cambió tu look anterior. Detalle técnico: ${detail}`);
+      }
+    } finally {
+      await Promise.all(temporaryPaths.map((path) => FileSystem.deleteAsync(path, { idempotent: true }).catch(() => undefined)));
+      setTryOnRendering(false);
+    }
+  };
+
+  const addToTryOn = (item: WardrobeItem) => {
+    if (tryOnRendering) return;
+    if (!cloudSession || !item.imagePath || item.imageKind !== "cutout") {
+      Alert.alert("Recorte pendiente", "Esta prenda necesita un PNG transparente antes de poder colocarla sobre tu avatar.");
+      return;
+    }
+    const existing = tryOnLayers.find((layer) => layer.item.id === item.id);
+    if (existing) {
+      const nextLayers = tryOnLayers.filter((layer) => layer.item.id !== item.id);
+      if (!nextLayers.length) {
+        clearTryOn().catch(() => undefined);
+      } else {
+        setTryOnLayers(nextLayers);
+      }
+      setView("builder");
+      return;
+    }
+    const key = `${item.id}-${Date.now()}`;
+    const fittingSlot = fittingSlotFor(item);
+    const previousLayers = tryOnLayers;
+    const nextLayers = [
+      ...previousLayers.filter((layer) => fittingSlot === "accessory" || fittingSlotFor(layer.item) !== fittingSlot),
+      { key, item },
+    ];
+    setTryOnLayers(nextLayers);
+    setSelectedItem(null);
+    setView("builder");
+  };
+
+  const measureTryOnCanvas = () => {
+    tryOnCanvasRef.current?.measureInWindow((x, y, width, height) => {
+      tryOnCanvasWindow.current = { x, y, width, height };
     });
   };
+
+  const pointIsOverBodyTarget = (item: WardrobeItem, x: number, y: number) => {
+    const bounds = tryOnCanvasWindow.current;
+    if (!bounds || x < bounds.x || x > bounds.x + bounds.width || y < bounds.y || y > bounds.y + bounds.height) return false;
+    const relativeX = (x - bounds.x) / bounds.width;
+    const relativeY = (y - bounds.y) / bounds.height;
+    const region = bodyRegionFor(item);
+    if (region === "head") return relativeX >= 0.15 && relativeX <= 0.85 && relativeY <= 0.28;
+    if (region === "torso") return relativeX >= 0.08 && relativeX <= 0.92 && relativeY >= 0.12 && relativeY <= 0.63;
+    if (region === "legs") return relativeX >= 0.12 && relativeX <= 0.88 && relativeY >= 0.38 && relativeY <= 0.88;
+    return relativeX >= 0.1 && relativeX <= 0.9 && relativeY >= 0.72;
+  };
+
+  const beginWardrobeDrag = (item: WardrobeItem, x: number, y: number) => {
+    measureTryOnCanvas();
+    setWardrobeDrag({ item, x, y, overCanvas: pointIsOverBodyTarget(item, x, y) });
+  };
+
+  const moveWardrobeDrag = (x: number, y: number) => {
+    setWardrobeDrag((current) => current ? { ...current, x, y, overCanvas: pointIsOverBodyTarget(current.item, x, y) } : null);
+  };
+
+  const finishWardrobeDrag = (item: WardrobeItem, x: number, y: number) => {
+    if (pointIsOverBodyTarget(item, x, y)) addToTryOn(item);
+    setWardrobeDrag(null);
+  };
+
+  const clearTryOn = async () => {
+    if (tryOnRendering) return;
+    const previousRender = tryOnRenderedUri;
+    setTryOnLayers([]);
+    setTryOnRenderedUri(null);
+    setTryOnRenderedSignature(null);
+    setTryOnResultQuality(null);
+    if (previousRender?.startsWith("file:")) {
+      await FileSystem.deleteAsync(previousRender, { idempotent: true }).catch(() => undefined);
+    }
+  };
+
+  const removeTryOnLayer = (key: string) => {
+    if (tryOnRendering) return;
+    const nextLayers = tryOnLayers.filter((layer) => layer.key !== key);
+    if (!nextLayers.length) {
+      clearTryOn().catch(() => undefined);
+      return;
+    }
+    setTryOnLayers(nextLayers);
+  };
+
+  const generateTryOnOutfit = () => {
+    if (tryOnRendering || !tryOnLayers.length) return;
+    if (!codexConnected) {
+      Alert.alert(
+        "Conecta ChatGPT para probar el outfit",
+        "Puedes preparar combinaciones sin conexión. ChatGPT solo se utiliza cuando generas la imagen vestida.",
+        [
+          { text: "Ahora no", style: "cancel" },
+          { text: "Conectar", onPress: connectCodexExperiment },
+        ],
+      );
+      return;
+    }
+    renderRealTryOn(tryOnLayers, tryOnLayers, "low").catch(() => undefined);
+  };
+
+  const improveTryOnQuality = () => {
+    if (tryOnRendering || !tryOnLayers.length) return;
+    if (!codexConnected) {
+      connectCodexExperiment();
+      return;
+    }
+    renderRealTryOn(tryOnLayers, tryOnLayers, "medium").catch(() => undefined);
+  };
+
+  const trySavedOutfit = (outfit: Outfit) => {
+    const readyPieces = outfit.pieces.filter((piece) => piece.imagePath && piece.imageKind === "cutout");
+    if (!readyPieces.length) {
+      Alert.alert("Prendas pendientes", "Este look todavía no tiene recortes suficientes para usar el probador.");
+      return;
+    }
+    setTryOnLayers(readyPieces.map((item, index) => ({ key: `${item.id}-look-${index}`, item })));
+    setSelectedOutfit(null);
+    setView("builder");
+  };
+
+  const tryOnWardrobe = activeWardrobe.filter((item) => item.imagePath && item.imageKind === "cutout");
+  const selectedTryOnSignature = tryOnSignatureFor(tryOnLayers);
+  const tryOnHasPendingChanges = tryOnLayers.length > 0 && selectedTryOnSignature !== tryOnRenderedSignature;
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="dark" />
-      <View style={styles.app}>
+      <View
+        ref={appRootRef}
+        style={styles.app}
+        onLayout={() => appRootRef.current?.measureInWindow((x, y) => { appRootWindow.current = { x, y }; })}
+      >
         <View style={styles.topbar}>
           <Pressable onPress={() => setView("closet")} style={styles.brand} accessibilityLabel="Ir al armario">
             <View style={styles.brandMark}><Text style={styles.brandLetter}>V</Text></View>
@@ -776,7 +1152,7 @@ export default function App() {
           </Pressable>
             <View style={styles.cloudBadge}>
             <View style={cloudSession ? styles.greenDot : styles.rustDot} />
-            <Text style={[styles.cloudBadgeText, !cloudSession && styles.cloudBadgePending]}>{processing ? experimentalProgress ? `ANALIZANDO ${experimentalProgress}%` : "ANALIZANDO…" : reconstructingId ? "CREANDO PNG…" : cloudSession ? "CUENTA PROTEGIDA" : "PREPARANDO CUENTA…"}</Text>
+            <Text style={[styles.cloudBadgeText, !cloudSession && styles.cloudBadgePending]}>{tryOnRendering ? "VISTIENDO AVATAR…" : processing ? experimentalProgress ? `ANALIZANDO ${experimentalProgress}%` : "ANALIZANDO…" : reconstructingId ? "CREANDO PNG…" : cloudSession ? "CUENTA PROTEGIDA" : "PREPARANDO CUENTA…"}</Text>
           </View>
           <Pressable style={styles.avatar} onPress={() => setProfileOpen(true)} accessibilityLabel="Privacidad y perfil">
             <Text style={styles.avatarText}>AL</Text>
@@ -833,48 +1209,121 @@ export default function App() {
                   <Text style={styles.cardTitle}>{item.name}</Text>
                   <Text style={styles.cardMeta}>{item.type} · {item.color} · {statusLabel(item.status)}</Text>
                 </View>
-                {builderItems.includes(item.id) && <View style={styles.selectedDot}><Text style={styles.selectedDotText}>✓</Text></View>}
+                {tryOnLayers.some((layer) => layer.item.id === item.id) && <View style={styles.selectedDot}><Text style={styles.selectedDotText}>✓</Text></View>}
               </Pressable>
             )}
           />
         )}
 
         {view === "builder" && (
-          <ScrollView contentContainerStyle={styles.builderScreen}>
-            <Text style={styles.eyebrow}>ESTILISTA PERSONAL</Text>
-            <Text style={styles.builderTitle}>Crea un look con lo que ya tienes.</Text>
-            <Text style={styles.builderIntro}>Elige hasta tres prendas. La recomendación real se conectará a tu armario privado.</Text>
-
-            <View style={styles.builderPanel}>
-              <View style={styles.stepHeading}><Text style={styles.stepNumber}>01</Text><Text style={styles.stepTitle}>Prendas base</Text></View>
-              <View style={styles.selectedStrip}>
-                {[0, 1, 2].map((slot) => {
-                  const item = activeWardrobe.find((entry) => entry.id === builderItems[slot]);
-                  return item ? (
-                    <Pressable key={slot} style={styles.selectedPiece} onPress={() => toggleBuilderItem(item.id)}>
-                      <GarmentVisual item={item} session={cloudSession} />
-                      <View style={styles.removeBubble}><Text style={styles.removeText}>×</Text></View>
-                    </Pressable>
-                  ) : (
-                    <Pressable key={slot} style={styles.emptyPiece} onPress={() => setView("closet")}>
-                      <Text style={styles.emptyPlus}>＋</Text><Text style={styles.emptyLabel}>Añadir</Text>
-                    </Pressable>
-                  );
-                })}
+          <ScrollView contentContainerStyle={styles.builderScreen} scrollEnabled={!wardrobeDrag && !tryOnRendering}>
+            <Text style={styles.eyebrow}>PROBADOR PERSONAL</Text>
+            <View style={styles.tryOnHeadingRow}>
+              <View style={styles.tryOnHeadingCopy}>
+                <Text style={styles.tryOnTitle}>Pruébatelo.</Text>
+                <Text style={styles.tryOnIntro}>Selecciona todas las prendas del outfit y genera una sola prueba cuando la combinación esté lista.</Text>
               </View>
-
-              <View style={styles.stepHeading}><Text style={styles.stepNumber}>02</Text><Text style={styles.stepTitle}>¿Cuál es el plan?</Text></View>
-              <View style={styles.occasionGrid}>
-                {occasions.map((option) => (
-                  <Pressable key={option} style={[styles.occasion, occasion === option && styles.occasionActive]} onPress={() => setOccasion(option)}>
-                    <Text style={[styles.occasionText, occasion === option && styles.occasionTextActive]}>{option}</Text>
-                  </Pressable>
-                ))}
-              </View>
-              <Pressable style={styles.generateButton} onPress={() => setView("looks")}>
-                <Text style={styles.generateButtonText}>Ver looks de muestra　✦</Text>
-              </Pressable>
+              {tryOnLayers.length > 0 && (
+                <Pressable onPress={() => clearTryOn().catch(() => undefined)} style={[styles.clearTryOnButton, tryOnRendering && styles.disabledButton]} disabled={tryOnRendering}>
+                  <Text style={styles.clearTryOnText}>Limpiar</Text>
+                </Pressable>
+              )}
             </View>
+
+            <ScrollView horizontal scrollEnabled={!wardrobeDrag && !tryOnRendering} showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.tryOnRail, tryOnRendering && styles.tryOnRailDisabled]} pointerEvents={tryOnRendering ? "none" : "auto"}>
+              {tryOnWardrobe.map((item) => (
+                <DraggableTryOnRailItem
+                  key={String(item.id)}
+                  item={item}
+                  session={cloudSession}
+                  active={tryOnLayers.some((layer) => layer.item.id === item.id)}
+                  onPress={() => addToTryOn(item)}
+                  onDragStart={beginWardrobeDrag}
+                  onDragMove={moveWardrobeDrag}
+                  onDragEnd={finishWardrobeDrag}
+                />
+              ))}
+              {tryOnWardrobe.length === 0 && (
+                <Pressable style={styles.tryOnRailEmpty} onPress={() => setView("closet")}>
+                  <Text style={styles.tryOnRailEmptyText}>Primero crea los recortes transparentes de tus prendas.</Text>
+                </Pressable>
+              )}
+            </ScrollView>
+
+            <View
+              ref={tryOnCanvasRef}
+              style={styles.tryOnCanvas}
+              onLayout={() => requestAnimationFrame(measureTryOnCanvas)}
+            >
+              <View style={styles.tryOnCanvasHalo} />
+              <Image source={tryOnRenderedUri ? { uri: tryOnRenderedUri } : alanAvatarBase} resizeMode="contain" style={styles.tryOnAvatarImage} />
+              {wardrobeDrag && (() => {
+                const region = bodyRegionFor(wardrobeDrag.item);
+                return (
+                  <View
+                    pointerEvents="none"
+                    style={[
+                      styles.bodyDropZone,
+                      region === "head" && styles.bodyDropHead,
+                      region === "torso" && styles.bodyDropTorso,
+                      region === "legs" && styles.bodyDropLegs,
+                      region === "feet" && styles.bodyDropFeet,
+                      wardrobeDrag.overCanvas && styles.bodyDropZoneReady,
+                    ]}
+                  >
+                    <Text style={[styles.bodyDropZoneText, wardrobeDrag.overCanvas && styles.bodyDropZoneTextReady]}>{bodyRegionLabel(region)}</Text>
+                  </View>
+                );
+              })()}
+              {tryOnRendering && (
+                <View pointerEvents="none" style={styles.tryOnRenderingOverlay}>
+                  <View style={styles.tryOnRenderingCard}>
+                    <ActivityIndicator color={rust} size="large" />
+                    <Text style={styles.tryOnRenderingTitle}>{tryOnRenderingQuality === "low" ? "Creando prueba rápida…" : "Mejorando el look…"}</Text>
+                    <Text style={styles.tryOnRenderingCopy}>{tryOnRenderingQuality === "low" ? "Ajustando todas las prendas al cuerpo con el modo más veloz." : "Refinando tela, volumen, identidad y detalles en mejor calidad."}</Text>
+                  </View>
+                </View>
+              )}
+              {tryOnLayers.length === 0 && !tryOnRendering && (
+                <View pointerEvents="none" style={styles.tryOnHint}>
+                  <Text style={styles.tryOnHintIcon}>↓</Text>
+                  <Text style={styles.tryOnHintText}>ELIGE UNA PRENDA</Text>
+                </View>
+              )}
+              {tryOnHasPendingChanges && !tryOnRendering && (
+                <View pointerEvents="none" style={styles.tryOnPendingBadge}>
+                  <Text style={styles.tryOnPendingBadgeText}>{tryOnLayers.length} {tryOnLayers.length === 1 ? "PRENDA LISTA" : "PRENDAS LISTAS"}</Text>
+                </View>
+              )}
+            </View>
+
+            {tryOnLayers.length > 0 && (
+              <View style={styles.tryOnSelectionPanel}>
+                <View style={styles.tryOnSelectionHeading}>
+                  <Text style={styles.tryOnControlEyebrow}>PRENDAS EN ESTE LOOK</Text>
+                  <Text style={styles.tryOnQualityBadge}>{tryOnHasPendingChanges ? "LISTO PARA PROBAR" : tryOnResultQuality === "medium" ? "MEJOR CALIDAD" : "VISTA RÁPIDA"}</Text>
+                </View>
+                <View style={styles.tryOnSelectionChips}>
+                  {tryOnLayers.map((layer) => (
+                    <Pressable key={layer.key} style={[styles.tryOnSelectionChip, tryOnRendering && styles.disabledButton]} onPress={() => removeTryOnLayer(layer.key)} disabled={tryOnRendering}>
+                      <Text style={styles.tryOnSelectionChipText}>{layer.item.name}</Text>
+                      <Text style={styles.tryOnSelectionChipRemove}>×</Text>
+                    </Pressable>
+                  ))}
+                </View>
+                {tryOnHasPendingChanges && !tryOnRendering && (
+                  <Pressable style={styles.generateTryOnOutfitButton} onPress={generateTryOnOutfit}>
+                    <Text style={styles.generateTryOnOutfitButtonText}>Probar outfit · {tryOnLayers.length} {tryOnLayers.length === 1 ? "prenda" : "prendas"}</Text>
+                  </Pressable>
+                )}
+                {!tryOnHasPendingChanges && tryOnResultQuality === "low" && !tryOnRendering && (
+                  <Pressable style={styles.improveTryOnButton} onPress={improveTryOnQuality}>
+                    <Text style={styles.improveTryOnButtonText}>✦ Mejorar este look</Text>
+                  </Pressable>
+                )}
+              </View>
+            )}
+            <Text style={styles.tryOnFootnote}>Combina arriba, capa, pantalón, gorra y calzado antes de generar. Solo se hace una solicitud por outfit.</Text>
           </ScrollView>
         )}
 
@@ -886,26 +1335,31 @@ export default function App() {
             columnWrapperStyle={styles.cardRow}
             contentContainerStyle={styles.screenContent}
             ListHeaderComponent={
-              <View style={styles.headingRow}>
-                <View>
-                  <Text style={styles.eyebrow}>TUS COMBINACIONES</Text>
-                  <Text style={styles.pageTitle}>Looks <Text style={styles.count}>0</Text></Text>
+              <View>
+                <View style={styles.headingRow}>
+                  <View>
+                    <Text style={styles.eyebrow}>TUS COMBINACIONES</Text>
+                    <Text style={styles.pageTitle}>Looks <Text style={styles.count}>{outfits.length}</Text></Text>
+                  </View>
+                  <Pressable style={[styles.importButton, outfitGenerating && styles.disabledButton]} onPress={generateSavedOutfits} disabled={outfitGenerating || !cloudSession}>
+                    <Text style={styles.importButtonText}>{outfitGenerating ? "CREANDO…" : "Generar　✦"}</Text>
+                  </Pressable>
                 </View>
-                <Pressable style={styles.importButton} onPress={() => setView("builder")}><Text style={styles.importButtonText}>Crear　✦</Text></Pressable>
+                <Text style={styles.looksIntro}>Vesta combina color, categoría y capas usando únicamente las prendas reales de tu armario.</Text>
               </View>
             }
             ListEmptyComponent={
               <View style={styles.emptyCollection}>
-                <Text style={styles.emptyCollectionTitle}>Aún no hay looks.</Text>
-                <Text style={styles.emptyCollectionCopy}>Aparecerán cuando tu armario tenga prendas reales.</Text>
+                {outfitsLoading ? <ActivityIndicator color={rust} /> : <Text style={styles.emptyCollectionTitle}>Crea tus primeros Looks.</Text>}
+                <Text style={styles.emptyCollectionCopy}>{outfitsLoading ? "Sincronizando tu colección privada…" : "Genera combinaciones completas y guárdalas automáticamente en tu cuenta."}</Text>
               </View>
             }
             renderItem={({ item }) => (
               <Pressable style={styles.lookCard} onPress={() => setSelectedOutfit(item)}>
-                <Sprite source={outfitSprite} index={item.id} columns={4} rows={2} aspectRatio={0.75} />
+                <OutfitVisual outfit={item} session={cloudSession} />
                 <View style={styles.lookCopy}>
                   <Text style={styles.cardTitle}>{item.name}</Text>
-                  <Text style={styles.cardMeta}>{item.occasion}</Text>
+                  <Text style={styles.cardMeta}>{item.occasion} · {item.pieces.length} prendas</Text>
                 </View>
               </Pressable>
             )}
@@ -923,6 +1377,19 @@ export default function App() {
             <Text style={[styles.navIcon, view === "looks" && styles.navActive]}>▤</Text><Text style={[styles.navLabel, view === "looks" && styles.navActive]}>Looks</Text>
           </Pressable>
         </View>
+
+        {wardrobeDrag && cloudSession && wardrobeDrag.item.imagePath && (
+          <View
+            pointerEvents="none"
+            style={[
+              styles.wardrobeDragGhost,
+              wardrobeDrag.overCanvas && styles.wardrobeDragGhostReady,
+              { left: wardrobeDrag.x - appRootWindow.current.x - 43, top: wardrobeDrag.y - appRootWindow.current.y - 43 },
+            ]}
+          >
+            <Image source={authorizedImageSource(cloudSession, wardrobeDrag.item.imagePath)} resizeMode="contain" style={styles.wardrobeDragGhostImage} />
+          </View>
+        )}
       </View>
 
       <Modal visible={importOpen} transparent animationType="slide" onRequestClose={() => setImportOpen(false)}>
@@ -1009,8 +1476,8 @@ export default function App() {
                     <Text style={styles.fullButtonText}>{reconstructingId === selectedItem.id ? "Creando y verificando…" : selectedItem.status === "approved" ? "Regenerar PNG" : "Crear PNG transparente"}</Text>
                   </Pressable>
                 )}
-                <Pressable style={styles.fullButton} onPress={() => toggleBuilderItem(selectedItem.id)}>
-                  <Text style={styles.fullButtonText}>{builderItems.includes(selectedItem.id) ? "✓ En el creador" : "＋ Usar en un look"}</Text>
+                <Pressable style={styles.fullButton} onPress={() => addToTryOn(selectedItem)}>
+                  <Text style={styles.fullButtonText}>{tryOnLayers.some((layer) => layer.item.id === selectedItem.id) ? "✓ En el probador" : "＋ Probar en mi avatar"}</Text>
                 </Pressable>
               </View>
             )}
@@ -1022,12 +1489,18 @@ export default function App() {
         <View style={styles.detailBackdrop}>
           <View style={styles.detailSheet}>
             <Pressable style={styles.closeButton} onPress={() => setSelectedOutfit(null)}><Text style={styles.closeText}>×</Text></Pressable>
-            {selectedOutfit && <Sprite source={outfitSprite} index={selectedOutfit.id} columns={4} rows={2} aspectRatio={0.75} />}
+            {selectedOutfit && <OutfitVisual outfit={selectedOutfit} session={cloudSession} />}
             {selectedOutfit && (
               <View style={styles.detailCopy}>
                 <Text style={styles.eyebrow}>{selectedOutfit.occasion.toUpperCase()}</Text>
                 <Text style={styles.detailTitle}>{selectedOutfit.name}</Text>
                 <Text style={styles.detailIntro}>{selectedOutfit.note}</Text>
+                <View style={styles.outfitPieceList}>
+                  {selectedOutfit.pieces.map((piece) => <Text key={String(piece.id)} style={styles.outfitPieceName}>• {piece.name}</Text>)}
+                </View>
+                <Pressable style={styles.fullButton} onPress={() => trySavedOutfit(selectedOutfit)}>
+                  <Text style={styles.fullButtonText}>Probar este outfit</Text>
+                </Pressable>
               </View>
             )}
           </View>
@@ -1080,6 +1553,11 @@ const styles = StyleSheet.create({
   emptyCollectionCopy: { color: muted, maxWidth: 250, marginTop: 8, textAlign: "center", fontSize: 9, lineHeight: 14 },
   cardRow: { gap: 9 },
   garmentCard: { flex: 1, position: "relative", marginBottom: 13, backgroundColor: paper, borderWidth: StyleSheet.hairlineWidth, borderColor: "transparent" },
+  looksIntro: { color: muted, fontSize: 9, lineHeight: 14, marginTop: -7, marginBottom: 18, maxWidth: 310 },
+  outfitCollage: { position: "relative", width: "100%", aspectRatio: 0.82, overflow: "hidden", backgroundColor: "#E9E2D5" },
+  outfitCollageCell: { position: "absolute", width: "50%", height: "50%", alignItems: "center", justifyContent: "center", borderWidth: StyleSheet.hairlineWidth, borderColor: "rgba(216,209,196,.72)" },
+  outfitCollageImage: { width: "92%", height: "92%" },
+  outfitCollageFallback: { color: rust, fontSize: 17 },
   spriteFrame: { width: "100%", overflow: "hidden", backgroundColor: paper },
   cloudGarmentImage: { width: "100%", height: "100%" },
   evidenceBadge: { position: "absolute", left: 6, bottom: 6, paddingHorizontal: 6, paddingVertical: 4, backgroundColor: "rgba(33,31,27,.78)" },
@@ -1100,6 +1578,69 @@ const styles = StyleSheet.create({
   builderScreen: { padding: 22, paddingBottom: 115 },
   builderTitle: { color: ink, maxWidth: 330, fontSize: 42, lineHeight: 44, letterSpacing: -1.7, fontFamily: Platform.select({ ios: "Georgia", android: "serif" }) },
   builderIntro: { color: muted, fontSize: 11, lineHeight: 17, marginTop: 14, marginBottom: 25 },
+  tryOnHeadingRow: { flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", gap: 12, marginBottom: 14 },
+  tryOnHeadingCopy: { flex: 1 },
+  tryOnTitle: { color: ink, fontSize: 39, lineHeight: 41, letterSpacing: -1.5, fontFamily: Platform.select({ ios: "Georgia", android: "serif" }) },
+  tryOnIntro: { color: muted, fontSize: 10, lineHeight: 15, marginTop: 7, maxWidth: 275 },
+  clearTryOnButton: { paddingHorizontal: 12, paddingVertical: 9, borderWidth: 1, borderColor: line, borderRadius: 18, marginBottom: 2 },
+  clearTryOnText: { color: muted, fontSize: 8, fontWeight: "700" },
+  tryOnRail: { gap: 8, paddingVertical: 4, paddingRight: 12, marginBottom: 14 },
+  tryOnRailDisabled: { opacity: 0.48 },
+  tryOnRailItem: { width: 78, overflow: "hidden", borderWidth: 1, borderColor: line, borderRadius: 8, backgroundColor: "#F8F5ED" },
+  tryOnRailItemActive: { borderWidth: 2, borderColor: rust },
+  tryOnRailLabel: { color: ink, fontSize: 7, fontWeight: "700", paddingHorizontal: 6, paddingBottom: 7, textAlign: "center" },
+  dragAffordance: { position: "absolute", right: 4, top: 4, width: 18, height: 18, borderRadius: 9, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(33,31,27,.82)" },
+  dragAffordanceText: { color: paper, fontSize: 9, fontWeight: "800" },
+  tryOnRailEmpty: { width: 260, minHeight: 92, alignItems: "center", justifyContent: "center", paddingHorizontal: 18, borderWidth: 1, borderStyle: "dashed", borderColor: line },
+  tryOnRailEmptyText: { color: muted, fontSize: 9, lineHeight: 14, textAlign: "center" },
+  tryOnCanvas: { position: "relative", width: "100%", height: 492, overflow: "hidden", borderWidth: 1, borderColor: line, borderRadius: 20, backgroundColor: "#E9E2D5" },
+  tryOnCanvasHalo: { position: "absolute", width: 260, height: 260, borderRadius: 130, left: "50%", top: 84, marginLeft: -130, backgroundColor: "rgba(255,255,255,.48)" },
+  tryOnAvatarImage: { position: "absolute", left: 0, right: 0, top: 6, bottom: 4, width: "100%", height: "98%" },
+  bodyDropZone: { position: "absolute", zIndex: 30, alignItems: "center", justifyContent: "center", borderWidth: 2, borderStyle: "dashed", borderColor: "rgba(163,79,49,.55)", borderRadius: 24, backgroundColor: "rgba(163,79,49,.10)" },
+  bodyDropZoneReady: { borderColor: "#71826A", borderStyle: "solid", backgroundColor: "rgba(113,130,106,.22)" },
+  bodyDropHead: { left: "31%", top: "1%", width: "38%", height: "19%", borderRadius: 60 },
+  bodyDropTorso: { left: "15%", top: "18%", width: "70%", height: "38%" },
+  bodyDropLegs: { left: "20%", top: "45%", width: "60%", height: "38%" },
+  bodyDropFeet: { left: "20%", top: "78%", width: "60%", height: "20%" },
+  bodyDropZoneText: { color: rust, fontSize: 7, fontWeight: "900", letterSpacing: 0.8, paddingHorizontal: 8, paddingVertical: 5, borderRadius: 12, backgroundColor: "rgba(243,239,229,.88)" },
+  bodyDropZoneTextReady: { color: "#52604D", backgroundColor: "rgba(247,249,244,.92)" },
+  tryOnRenderingOverlay: { position: "absolute", zIndex: 40, left: 0, right: 0, top: 0, bottom: 0, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(233,226,213,.72)" },
+  tryOnRenderingCard: { width: 230, alignItems: "center", paddingHorizontal: 24, paddingVertical: 23, borderRadius: 20, borderWidth: 1, borderColor: "rgba(163,79,49,.22)", backgroundColor: "rgba(248,245,237,.96)" },
+  tryOnRenderingTitle: { color: ink, fontSize: 14, fontWeight: "800", marginTop: 13 },
+  tryOnRenderingCopy: { color: muted, fontSize: 8, lineHeight: 13, textAlign: "center", marginTop: 6 },
+  tryOnLayer: { position: "absolute", left: 0, top: 0, borderWidth: 1, borderColor: "transparent", borderRadius: 10 },
+  tryOnLayerSelected: { borderColor: "rgba(163,79,49,.75)", borderStyle: "dashed", backgroundColor: "rgba(255,255,255,.08)" },
+  tryOnLayerImage: { width: "100%", height: "100%" },
+  tryOnHandle: { position: "absolute", right: -11, top: -11, width: 23, height: 23, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: rust, borderWidth: 2, borderColor: paper },
+  tryOnHandleText: { color: "white", fontSize: 10, fontWeight: "800" },
+  tryOnHint: { position: "absolute", left: 0, right: 0, top: 202, alignItems: "center" },
+  tryOnHintIcon: { color: rust, fontSize: 20, fontWeight: "300" },
+  tryOnHintText: { color: rust, fontSize: 7, fontWeight: "800", letterSpacing: 1.2, marginTop: 4, paddingHorizontal: 9, paddingVertical: 6, borderRadius: 12, backgroundColor: "rgba(243,239,229,.86)" },
+  tryOnPendingBadge: { position: "absolute", left: 0, right: 0, bottom: 18, alignItems: "center" },
+  tryOnPendingBadgeText: { color: paper, fontSize: 7, fontWeight: "800", letterSpacing: 1, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 15, backgroundColor: "rgba(25,24,21,.82)" },
+  tryOnControls: { minHeight: 59, flexDirection: "row", alignItems: "center", gap: 7, marginTop: 10, paddingHorizontal: 11, paddingVertical: 9, borderWidth: 1, borderColor: line, borderRadius: 14, backgroundColor: "#F8F5ED" },
+  tryOnControlCopy: { flex: 1, paddingRight: 4 },
+  tryOnControlEyebrow: { color: rust, fontSize: 6, fontWeight: "800", letterSpacing: 0.8 },
+  tryOnControlName: { color: ink, fontSize: 10, fontWeight: "700", marginTop: 3 },
+  tryOnControlButton: { width: 35, height: 35, borderRadius: 18, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: line, backgroundColor: paper },
+  tryOnControlButtonText: { color: ink, fontSize: 16, fontWeight: "600" },
+  tryOnDeleteButton: { borderColor: "#D2A596", backgroundColor: "#F6EAE4" },
+  tryOnDeleteButtonText: { color: rust, fontSize: 21, lineHeight: 23, fontWeight: "300" },
+  tryOnSelectionPanel: { marginTop: 10, padding: 11, borderWidth: 1, borderColor: line, borderRadius: 14, backgroundColor: "#F8F5ED" },
+  tryOnSelectionHeading: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
+  tryOnQualityBadge: { color: rust, fontSize: 6, fontWeight: "800", letterSpacing: 0.8, paddingHorizontal: 7, paddingVertical: 5, borderRadius: 10, backgroundColor: "#F2E1D9" },
+  tryOnSelectionChips: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },
+  tryOnSelectionChip: { flexDirection: "row", alignItems: "center", gap: 7, paddingLeft: 10, paddingRight: 7, paddingVertical: 7, borderRadius: 18, borderWidth: 1, borderColor: "#C8BFB1", backgroundColor: paper },
+  tryOnSelectionChipText: { color: ink, maxWidth: 150, fontSize: 8, fontWeight: "700" },
+  tryOnSelectionChipRemove: { color: rust, fontSize: 15, lineHeight: 15 },
+  generateTryOnOutfitButton: { alignItems: "center", marginTop: 10, paddingVertical: 13, borderRadius: 20, backgroundColor: rust },
+  generateTryOnOutfitButtonText: { color: "#FFF9EF", fontSize: 9, fontWeight: "800", letterSpacing: 0.2 },
+  improveTryOnButton: { alignItems: "center", marginTop: 10, paddingVertical: 11, borderRadius: 18, backgroundColor: ink },
+  improveTryOnButtonText: { color: paper, fontSize: 8, fontWeight: "800", letterSpacing: 0.25 },
+  tryOnFootnote: { color: muted, fontSize: 7, lineHeight: 11, textAlign: "center", marginTop: 10 },
+  wardrobeDragGhost: { position: "absolute", zIndex: 200, width: 86, height: 86, padding: 5, borderRadius: 18, borderWidth: 2, borderColor: rust, backgroundColor: "rgba(248,245,237,.95)", shadowColor: "#000", shadowOpacity: 0.18, shadowRadius: 10, shadowOffset: { width: 0, height: 5 } },
+  wardrobeDragGhostReady: { borderColor: "#71826A", transform: [{ scale: 1.08 }] },
+  wardrobeDragGhostImage: { width: "100%", height: "100%" },
   builderPanel: { backgroundColor: "#F8F5ED", padding: 17, borderWidth: 1, borderColor: line },
   stepHeading: { flexDirection: "row", alignItems: "center", gap: 9, marginBottom: 12, marginTop: 4 },
   stepNumber: { color: rust, fontSize: 8, fontWeight: "800" },
@@ -1120,6 +1661,8 @@ const styles = StyleSheet.create({
   generateButtonText: { color: "#FFF9EF", fontSize: 10, fontWeight: "800", letterSpacing: 0.3 },
   lookCard: { flex: 1, marginBottom: 14, backgroundColor: "#EAE5DA" },
   lookCopy: { padding: 10, backgroundColor: "#F8F5ED" },
+  outfitPieceList: { marginTop: 12, marginBottom: 14, padding: 12, gap: 5, borderWidth: 1, borderColor: line, borderRadius: 12, backgroundColor: "#F8F5ED" },
+  outfitPieceName: { color: ink, fontSize: 9, lineHeight: 14 },
   modalBackdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(22,20,17,.45)" },
   modalSheet: { maxHeight: "92%", paddingHorizontal: 20, paddingTop: 32, paddingBottom: 30, backgroundColor: paper, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
   profileSheet: { paddingHorizontal: 22, paddingTop: 38, paddingBottom: 42, backgroundColor: paper, borderTopLeftRadius: 24, borderTopRightRadius: 24 },

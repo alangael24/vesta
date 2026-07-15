@@ -36,7 +36,7 @@ test("web panel and native client expose the real privacy workflow", async () =>
 
   assert.match(layoutSource, /Vesta — tu armario, mejor combinado/i);
   assert.match(webSource, /Colección de muestra/i);
-  assert.match(webSource, /Emparejar app nativa/i);
+  assert.match(webSource, /No necesitas emparejar nada/i);
   assert.match(webSource, /R2 privado/i);
   assert.doesNotMatch(webSource, /6 prendas detectadas|4 looks nuevos listos|Usar fotos de ejemplo/i);
 
