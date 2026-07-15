@@ -139,7 +139,7 @@ export async function PUT(request: Request) {
   }
 }
 
-export async function DELETE(request: Request) {
+export async function POST(request: Request) {
   if (!authorized(request)) return notFound();
 
   const payload = await safeJson(request);
