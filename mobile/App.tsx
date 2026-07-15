@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   FlatList,
   Image,
   ImageSourcePropType,
@@ -41,6 +42,7 @@ import {
   prepareAvatarTryOnReference,
   prepareTryOnGarmentReference,
 } from "./experimental-inventory";
+import { SubscriptionPaywall } from "./SubscriptionPaywall";
 
 type ViewName = "closet" | "builder" | "looks";
 type Category = "all" | "tops" | "layers" | "bottoms" | "accessories";
@@ -241,34 +243,105 @@ function GarmentVisual({ item, session }: { item: WardrobeItem; session: CloudSe
   return <Sprite source={wardrobeSprite} index={item.spriteIndex ?? Number(item.id)} columns={4} rows={4} />;
 }
 
-function OutfitVisual({ outfit, session }: { outfit: Outfit; session: CloudSession | null }) {
+function OutfitVisual({
+  outfit,
+  session,
+  showPieces = false,
+}: {
+  outfit: Outfit;
+  session: CloudSession | null;
+  showPieces?: boolean;
+}) {
+  const visiblePieces = outfit.pieces.slice(0, 6);
+  const collageColumns = visiblePieces.length > 4 ? 3 : 2;
+  const cellWidth = 100 / collageColumns;
   const renderSource = outfit.localRenderUri
     ? { uri: outfit.localRenderUri }
     : outfit.renderPath && session ? authorizedImageSource(session, outfit.renderPath) : null;
-  if (renderSource) {
-    return (
-      <View style={styles.outfitCollage}>
-        <Image source={renderSource} resizeMode="cover" style={styles.outfitRenderImage} />
-        <View style={styles.outfitReadyBadge}><Text style={styles.outfitReadyBadgeText}>LOOK REAL</Text></View>
-      </View>
-    );
-  }
+  const revealProgress = useRef(new Animated.Value(showPieces ? 1 : 0)).current;
+
+  useEffect(() => {
+    const animation = Animated.spring(revealProgress, {
+      toValue: showPieces ? 1 : 0,
+      damping: 22,
+      stiffness: 250,
+      mass: 0.72,
+      useNativeDriver: true,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [revealProgress, showPieces]);
+
   return (
     <View style={styles.outfitCollage}>
-      {outfit.pieces.slice(0, 4).map((piece, index) => (
-        <View
-          key={String(piece.id)}
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.outfitVisualLayer,
+          renderSource ? {
+            opacity: revealProgress.interpolate({ inputRange: [0, 0.22, 1], outputRange: [0, 0.48, 1] }),
+            transform: [
+              { translateX: revealProgress.interpolate({ inputRange: [0, 1], outputRange: [-34, 0] }) },
+              { scale: revealProgress.interpolate({ inputRange: [0, 1], outputRange: [0.97, 1] }) },
+            ],
+          } : { opacity: 1 },
+        ]}
+      >
+        {visiblePieces.map((piece, index) => (
+          <Animated.View
+            key={String(piece.id)}
+            style={[
+              styles.outfitCollageCell,
+              {
+                width: `${cellWidth}%`,
+                left: `${(index % collageColumns) * cellWidth}%`,
+                top: index < collageColumns ? "0%" : "50%",
+              },
+              renderSource ? {
+                transform: [
+                  {
+                    translateX: revealProgress.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [(collageColumns - 1 - (index % collageColumns) * 2) * 9, 0],
+                    }),
+                  },
+                  {
+                    translateY: revealProgress.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [index < collageColumns ? 10 : -10, 0],
+                    }),
+                  },
+                ],
+              } : null,
+            ]}
+          >
+            {piece.imagePath && session
+              ? <Image source={authorizedImageSource(session, piece.imagePath)} resizeMode="contain" style={styles.outfitCollageImage} />
+              : <Text style={styles.outfitCollageFallback}>✦</Text>}
+          </Animated.View>
+        ))}
+        <View style={styles.outfitPendingBadge}>
+          <Text style={styles.outfitPendingBadgeText}>{renderSource ? "PRENDAS DEL LOOK" : "FOTO PENDIENTE"}</Text>
+        </View>
+      </Animated.View>
+      {renderSource && (
+        <Animated.View
+          pointerEvents="none"
           style={[
-            styles.outfitCollageCell,
-            { left: index % 2 === 0 ? "0%" : "50%", top: index < 2 ? "0%" : "50%" },
+            styles.outfitVisualLayer,
+            {
+              opacity: revealProgress.interpolate({ inputRange: [0, 0.76, 1], outputRange: [1, 0.22, 0] }),
+              transform: [
+                { translateX: revealProgress.interpolate({ inputRange: [0, 1], outputRange: [0, 46] }) },
+                { scale: revealProgress.interpolate({ inputRange: [0, 1], outputRange: [1, 0.96] }) },
+              ],
+            },
           ]}
         >
-          {piece.imagePath && session
-            ? <Image source={authorizedImageSource(session, piece.imagePath)} resizeMode="contain" style={styles.outfitCollageImage} />
-            : <Text style={styles.outfitCollageFallback}>✦</Text>}
-        </View>
-      ))}
-      <View style={styles.outfitPendingBadge}><Text style={styles.outfitPendingBadgeText}>FOTO PENDIENTE</Text></View>
+          <Image source={renderSource} resizeMode="cover" style={styles.outfitRenderImage} />
+          <View style={styles.outfitReadyBadge}><Text style={styles.outfitReadyBadgeText}>LOOK REAL</Text></View>
+        </Animated.View>
+      )}
     </View>
   );
 }
@@ -279,18 +352,20 @@ function LookCard({
   onOpen,
   onPeek,
   onPeekEnd,
+  showPieces,
 }: {
   outfit: Outfit;
   session: CloudSession | null;
   onOpen: () => void;
   onPeek: () => void;
   onPeekEnd: () => void;
+  showPieces: boolean;
 }) {
   const longPressActive = useRef(false);
   return (
     <Pressable
       style={styles.lookCard}
-      delayLongPress={280}
+      delayLongPress={100}
       onPressIn={() => { longPressActive.current = false; }}
       onLongPress={() => {
         longPressActive.current = true;
@@ -306,7 +381,7 @@ function LookCard({
       accessibilityLabel={outfit.name}
       accessibilityHint="Toca para abrir o mantén presionado para ver las prendas del outfit"
     >
-      <OutfitVisual outfit={outfit} session={session} />
+      <OutfitVisual outfit={outfit} session={session} showPieces={showPieces} />
       <View style={styles.lookCopy}>
         <Text style={styles.cardTitle}>{outfit.name}</Text>
         <Text style={styles.cardMeta}>{outfit.occasion} · {outfit.pieces.length} prendas · {outfit.renderPath ? "foto lista" : "foto pendiente"}</Text>
@@ -421,6 +496,7 @@ export default function App() {
   const [productPlacement, setProductPlacement] = useState<ProductPlacementHint>("auto");
   const [productImporting, setProductImporting] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [paywallOpen, setPaywallOpen] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
   const [avatarSelfie, setAvatarSelfie] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [avatarFullBody, setAvatarFullBody] = useState<ImagePicker.ImagePickerAsset | null>(null);
@@ -522,7 +598,7 @@ export default function App() {
       setCloudSession(session);
     } catch {
       automaticCloudConnectionStarted.current = false;
-      Alert.alert("No se pudo preparar tu cuenta", "Vesta volverá a intentarlo cuando abras la app o subas fotos.");
+      Alert.alert("No se pudo preparar tu cuenta", "Outfit Club volverá a intentarlo cuando abras la app o subas fotos.");
     } finally {
       setPairing(false);
     }
@@ -747,7 +823,7 @@ export default function App() {
   async function generateSavedOutfits() {
     if (!cloudSession || outfitGenerating) return;
     if (!localAvatarUri && !cloudAvatar) {
-      Alert.alert("Crea tu avatar primero", "Vesta necesita tu avatar privado antes de poder mostrar cómo te quedan los Looks.", [
+      Alert.alert("Crea tu avatar primero", "Outfit Club necesita tu avatar privado antes de poder mostrar cómo te quedan los Looks.", [
         { text: "Después", style: "cancel" },
         { text: "Crear avatar", onPress: () => setAvatarOpen(true) },
       ]);
@@ -783,7 +859,7 @@ export default function App() {
       }
       if (!response.ok) {
         if (result.error === "outfit_wardrobe_too_small") {
-          Alert.alert("Faltan prendas", "Vesta necesita al menos una prenda de arriba y un pantalón con recorte listo.");
+          Alert.alert("Faltan prendas", "Outfit Club necesita al menos una prenda de arriba y un pantalón con recorte listo.");
         } else if (result.error === "outfit_combinations_exhausted") {
           Alert.alert("Ya encontraste todas", "No quedan combinaciones nuevas con las prendas que están listas ahora mismo.");
         } else {
@@ -816,7 +892,7 @@ export default function App() {
     if (!codexConnected) {
       Alert.alert(
         "Conecta ChatGPT para crear esta foto",
-        "Vesta necesita la sesión experimental únicamente mientras te viste con las prendas seleccionadas.",
+        "Outfit Club necesita la sesión experimental únicamente mientras te viste con las prendas seleccionadas.",
         [
           { text: "Ahora no", style: "cancel" },
           { text: "Conectar", onPress: connectCodexExperiment },
@@ -964,7 +1040,7 @@ export default function App() {
 
     Alert.alert(
       "Análisis pendiente",
-      "Vesta encontró las fotos que ya subiste. Puedes reintentar el análisis sin volver a cargarlas.",
+      "Outfit Club encontró las fotos que ya subiste. Puedes reintentar el análisis sin volver a cargarlas.",
       [
         { text: "Después", style: "cancel" },
         { text: "Reintentar ahora", onPress: () => retryCloudBatch(session, pendingBatch.id) },
@@ -1017,7 +1093,7 @@ export default function App() {
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permission.granted) {
-        Alert.alert("Permiso necesario", "Vesta solo puede ver las fotos que tú selecciones. Activa el permiso para continuar.");
+        Alert.alert("Permiso necesario", "Outfit Club solo puede ver las fotos que tú selecciones. Activa el permiso para continuar.");
         return;
       }
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -1040,7 +1116,7 @@ export default function App() {
   const pickAvatarReference = async (kind: "selfie" | "body") => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert("Permiso necesario", "Vesta solo verá la foto que selecciones para crear tu avatar.");
+      Alert.alert("Permiso necesario", "Outfit Club solo verá la foto que selecciones para crear tu avatar.");
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -1113,7 +1189,7 @@ export default function App() {
       setAvatarConsent(false);
       setAvatarOpen(false);
       setProfileOpen(false);
-      Alert.alert("Avatar guardado", "Ya puedes probar prendas y generar Looks. Las fotos originales no se subieron a la nube de Vesta.");
+      Alert.alert("Avatar guardado", "Ya puedes probar prendas y generar Looks. Las fotos originales no se subieron a la nube de Outfit Club.");
     } catch (error) {
       const detail = error instanceof Error ? error.message : "unknown";
       Alert.alert("No se guardó el avatar", `El borrador sigue disponible para reintentar. Detalle técnico: ${detail}`);
@@ -1164,7 +1240,7 @@ export default function App() {
   const importProductFromUrl = async () => {
     if (productImporting) return;
     if (!cloudSession) {
-      Alert.alert("Preparando tu cuenta", "Vesta necesita terminar la conexión privada antes de importar esta prenda.");
+      Alert.alert("Preparando tu cuenta", "Outfit Club necesita terminar la conexión privada antes de importar esta prenda.");
       return;
     }
     if (!productUrl.trim()) {
@@ -1230,7 +1306,7 @@ export default function App() {
       await Clipboard.setStringAsync(pending.userCode);
       const shouldContinue = await new Promise<boolean>((resolve) => Alert.alert(
         "Código de OpenAI copiado",
-        `${pending.userCode}\n\nPulsa “Abrir OpenAI”, pega el código y autoriza esta prueba. Después vuelve a Vesta.`,
+        `${pending.userCode}\n\nPulsa “Abrir OpenAI”, pega el código y autoriza esta prueba. Después vuelve a Outfit Club.`,
         [
           { text: "Cancelar", style: "cancel", onPress: () => resolve(false) },
           { text: "Abrir OpenAI", onPress: () => resolve(true) },
@@ -1266,7 +1342,7 @@ export default function App() {
           setPairing(false);
         });
       }
-      Alert.alert("Preparando tu cuenta", "Vesta terminará la configuración privada y volverá automáticamente.");
+      Alert.alert("Preparando tu cuenta", "Outfit Club terminará la configuración privada y volverá automáticamente.");
       return;
     }
     if (photos.some((photo) => !photo.fileSize)) {
@@ -1324,7 +1400,7 @@ export default function App() {
       if (codexConnected) {
         Alert.alert(
           "Fotos guardadas en tu nube",
-          `${uploadedCount} fotos ya están privadas en Vesta. Para esta prueba, las copias reducidas se enviarán directamente desde tu iPhone al endpoint de Codex asociado a tu suscripción de ChatGPT. Los tokens nunca pasarán por la nube de Vesta.`,
+          `${uploadedCount} fotos ya están privadas en Outfit Club. Para esta prueba, las copias reducidas se enviarán directamente desde tu iPhone al endpoint de Codex asociado a tu suscripción de ChatGPT. Los tokens nunca pasarán por la nube de Outfit Club.`,
           [
             { text: "Analizar después", style: "cancel" },
             { text: "Usar ChatGPT (prueba)", onPress: () => startExperimentalProcessing(batch.batchId, experimentalPhotos) },
@@ -1334,7 +1410,7 @@ export default function App() {
       }
       Alert.alert(
         "Fotos guardadas en tu nube",
-        `${uploadedCount} fotos ya están privadas en Vesta. Para detectar prendas se enviarán copias reducidas a la API de OpenAI. No se usan para entrenar por defecto; sus registros de seguridad pueden conservarse hasta 30 días. ¿Qué prefieres?`,
+        `${uploadedCount} fotos ya están privadas en Outfit Club. Para detectar prendas se enviarán copias reducidas a la API de OpenAI. No se usan para entrenar por defecto; sus registros de seguridad pueden conservarse hasta 30 días. ¿Qué prefieres?`,
         [
           { text: "Analizar después", style: "cancel" },
           { text: "Económico", onPress: () => startProcessing(batch.batchId, "economy") },
@@ -1352,7 +1428,7 @@ export default function App() {
           automaticCloudConnectionStarted.current = false;
           setPairing(false);
         });
-        Alert.alert("Actualizando tu cuenta", "La credencial privada había expirado. Vesta la está renovando automáticamente; tus fotos siguen en el teléfono.");
+        Alert.alert("Actualizando tu cuenta", "La credencial privada había expirado. Outfit Club la está renovando automáticamente; tus fotos siguen en el teléfono.");
       } else {
         Alert.alert("La subida se interrumpió", `Tus fotos locales siguen intactas. Detalle técnico: ${detail}`);
       }
@@ -1419,7 +1495,7 @@ export default function App() {
       await loadWardrobe(cloudSession);
       Alert.alert(
         "Inventario experimental listo",
-        `Vesta detectó ${result.garmentCount ?? 0} prendas, creó ${generatedCount} imagen(es) de catálogo y evitó ${basicCount} generación(es) de básicos. Revísalas antes de aprobarlas.`,
+        `Outfit Club detectó ${result.garmentCount ?? 0} prendas, creó ${generatedCount} imagen(es) de catálogo y evitó ${basicCount} generación(es) de básicos. Revísalas antes de aprobarlas.`,
       );
     } catch (error) {
       const detail = error instanceof Error ? error.message : "unknown";
@@ -1450,7 +1526,7 @@ export default function App() {
       if (!response.ok) throw new Error(result.error || "processing_failed");
       await loadWardrobe(cloudSession);
       const dedupCopy = result.deduplicationStatus === "failed" ? "La revisión de duplicados queda pendiente." : `${result.duplicateCount ?? 0} duplicados de alta confianza quedaron apartados.`;
-      Alert.alert("Inventario listo para revisar", `Vesta detectó ${result.garmentCount ?? 0} candidatos de prendas. ${dedupCopy}`);
+      Alert.alert("Inventario listo para revisar", `Outfit Club detectó ${result.garmentCount ?? 0} candidatos de prendas. ${dedupCopy}`);
     } catch {
       Alert.alert("El análisis no terminó", "Tus originales siguen seguros en la nube. Podremos reintentar el inventario sin volver a subirlos.");
     } finally {
@@ -1460,13 +1536,13 @@ export default function App() {
 
   const chooseReconstruction = (item: WardrobeItem) => {
     if (item.isBasic) {
-      Alert.alert("Básico reconocido", "Vesta conservará la foto real de esta prenda y no gastará una generación de ImageGen.");
+      Alert.alert("Básico reconocido", "Outfit Club conservará la foto real de esta prenda y no gastará una generación de ImageGen.");
       return;
     }
     if (codexConnected && item.evidencePath) {
       Alert.alert(
         "Crear imagen de catálogo",
-        "GPT Image 2 aislará esta prenda a partir de tu foto. Vesta quitará el fondo para integrarla exactamente con el color del armario. La foto original seguirá guardada como evidencia privada.",
+        "GPT Image 2 aislará esta prenda a partir de tu foto. Outfit Club quitará el fondo para integrarla exactamente con el color del armario. La foto original seguirá guardada como evidencia privada.",
         [
           { text: "Ahora no", style: "cancel" },
           { text: "Crear", onPress: () => startExperimentalReconstruction(item) },
@@ -1524,7 +1600,7 @@ export default function App() {
       const items = await loadWardrobe(cloudSession);
       const updated = items?.find((candidate) => candidate.id === item.id);
       if (updated) setSelectedItem(updated);
-      Alert.alert("Imagen lista", "Vesta creó un recorte transparente que se integra con el fondo del armario. Compáralo con la evidencia antes de aprobarlo.");
+      Alert.alert("Imagen lista", "Outfit Club creó un recorte transparente que se integra con el fondo del armario. Compáralo con la evidencia antes de aprobarlo.");
     } catch (error) {
       const detail = error instanceof Error ? error.message : "unknown";
       Alert.alert("No se creó la imagen", `La evidencia original sigue intacta. Detalle técnico: ${detail}`);
@@ -1559,7 +1635,7 @@ export default function App() {
       if (result.status === "approved") {
         Alert.alert("PNG verificado", "La reconstrucción pasó las comprobaciones técnicas y visuales.");
       } else {
-        Alert.alert("Necesita revisión", "Vesta conservó la evidencia y marcó el resultado para revisión en lugar de aprobarlo automáticamente.");
+        Alert.alert("Necesita revisión", "Outfit Club conservó la evidencia y marcó el resultado para revisión en lugar de aprobarlo automáticamente.");
       }
     } catch {
       Alert.alert("No se creó el PNG", "La prenda y sus fotos siguen intactas. Puedes reintentar sin volver a subirlas.");
@@ -1849,8 +1925,8 @@ export default function App() {
       >
         <View style={styles.topbar}>
           <Pressable onPress={() => setView("closet")} style={styles.brand} accessibilityLabel="Ir al armario">
-            <View style={styles.brandMark}><Text style={styles.brandLetter}>V</Text></View>
-            <Text style={styles.brandName}>VESTA</Text>
+            <View style={styles.brandMark}><Text style={styles.brandLetter}>OC</Text></View>
+            <Text style={styles.brandName}>OUTFIT CLUB</Text>
           </Pressable>
             <View style={styles.cloudBadge}>
             <View style={cloudSession ? styles.greenDot : styles.rustDot} />
@@ -2076,7 +2152,7 @@ export default function App() {
                       : pendingOutfitCount ? "Crear fotos　✦" : "Generar　✦"}</Text>
                   </Pressable>
                 </View>
-                <Text style={styles.looksIntro}>Vesta arma el outfit y crea una foto realista de ti usándolo. Cada imagen terminada se guarda para no volver a generarla al abrirla.</Text>
+                <Text style={styles.looksIntro}>Outfit Club arma el outfit y crea una foto realista de ti usándolo. Cada imagen terminada se guarda para no volver a generarla al abrirla.</Text>
               </View>
             }
             ListEmptyComponent={
@@ -2092,6 +2168,7 @@ export default function App() {
                 onOpen={() => setSelectedOutfit(item)}
                 onPeek={() => setPeekedOutfit(item)}
                 onPeekEnd={() => setPeekedOutfit(null)}
+                showPieces={peekedOutfit?.id === item.id}
               />
             )}
           />
@@ -2122,29 +2199,6 @@ export default function App() {
           </View>
         )}
 
-        {peekedOutfit && (
-          <View pointerEvents="none" style={styles.lookPeekOverlay}>
-            <View style={styles.lookPeekCard}>
-              <View style={styles.lookPeekHeading}>
-                <View style={styles.lookPeekHeadingCopy}>
-                  <Text style={styles.lookPeekEyebrow}>PRENDAS DE ESTE OUTFIT</Text>
-                  <Text style={styles.lookPeekTitle}>{peekedOutfit.name}</Text>
-                </View>
-                <Text style={styles.lookPeekCount}>{peekedOutfit.pieces.length}</Text>
-              </View>
-              <View style={styles.lookPeekPieces}>
-                {peekedOutfit.pieces.map((piece) => (
-                  <View key={String(piece.id)} style={styles.lookPeekPiece}>
-                    <GarmentVisual item={piece} session={cloudSession} />
-                    <Text style={styles.lookPeekPieceName} numberOfLines={2}>{piece.name}</Text>
-                    <Text style={styles.lookPeekPieceMeta} numberOfLines={1}>{piece.type} · {piece.color}</Text>
-                  </View>
-                ))}
-              </View>
-              <Text style={styles.lookPeekRelease}>SUELTA PARA CERRAR</Text>
-            </View>
-          </View>
-        )}
       </View>
 
       <Modal visible={importOpen} transparent animationType="slide" onRequestClose={() => setImportOpen(false)}>
@@ -2205,7 +2259,7 @@ export default function App() {
             <Pressable style={styles.closeButton} onPress={() => setLinkImportOpen(false)} disabled={productImporting}><Text style={styles.closeText}>×</Text></Pressable>
             <View style={styles.scanOrb}><Text style={styles.scanOrbText}>↗</Text></View>
             <Text style={[styles.eyebrow, styles.centerText]}>PRENDA DE INTERNET</Text>
-            <Text style={styles.modalTitle}>Pega el link. Vesta te la pone.</Text>
+            <Text style={styles.modalTitle}>Pega el link. Outfit Club te la pone.</Text>
             <Text style={styles.modalIntro}>Importaremos la imagen pública del producto a tu armario privado y crearemos una prueba realista sobre tu avatar.</Text>
 
             <TextInput
@@ -2262,7 +2316,7 @@ export default function App() {
                   ? <Image source={avatarDisplaySource} resizeMode="cover" style={styles.profileAvatarImage} />
                   : <Text style={styles.profileAvatarText}>YO</Text>}
               </View>
-              <Text style={[styles.eyebrow, styles.centerText]}>TU VESTA</Text>
+              <Text style={[styles.eyebrow, styles.centerText]}>TU OUTFIT CLUB</Text>
               <Text style={styles.modalTitle}>Tu nube privada.</Text>
               <Text style={styles.modalIntro}>Cada cuenta tiene su propio avatar, armario y Looks. Las imágenes solo se entregan después de verificar el dispositivo.</Text>
               <View style={styles.architectureCard}>
@@ -2274,7 +2328,15 @@ export default function App() {
                 <View style={styles.architectureRow}><Text style={styles.architectureLabel}>ESTADO</Text><Text style={cloudSession ? styles.architectureValue : styles.architecturePending}>{cloudSession ? "Protegida y sincronizada" : pairing ? "Preparando cuenta…" : "Configurando…"}</Text></View>
                 <View style={styles.architectureRow}><Text style={styles.architectureLabel}>CHATGPT · PRUEBA</Text><Text style={codexConnected ? styles.architectureValue : styles.architecturePending}>{codexConnected ? "Conectado" : codexConnecting ? "Esperando autorización…" : "Desconectado"}</Text></View>
               </View>
-              <Text style={styles.profileFootnote}>{cloudSession ? `${cloudWardrobe.length ? `${cloudWardrobe.length} prendas reales sincronizadas. ` : ""}El avatar y los Looks pertenecen automáticamente a esta cuenta; las copias locales permiten volver a verlos en este iPhone.` : "Vesta está creando automáticamente el espacio privado de esta cuenta."}</Text>
+              <Text style={styles.profileFootnote}>{cloudSession ? `${cloudWardrobe.length ? `${cloudWardrobe.length} prendas reales sincronizadas. ` : ""}El avatar y los Looks pertenecen automáticamente a esta cuenta; las copias locales permiten volver a verlos en este iPhone.` : "Outfit Club está creando automáticamente el espacio privado de esta cuenta."}</Text>
+              <Pressable style={styles.premiumCard} onPress={() => { setProfileOpen(false); setPaywallOpen(true); }}>
+                <View style={styles.premiumCardIcon}><Text style={styles.premiumCardIconText}>OC</Text></View>
+                <View style={styles.premiumCardCopy}>
+                  <Text style={styles.premiumCardEyebrow}>OUTFIT CLUB PREMIUM</Text>
+                  <Text style={styles.premiumCardTitle}>Ver planes y administrar pagos</Text>
+                </View>
+                <Text style={styles.premiumCardArrow}>›</Text>
+              </Pressable>
               {cloudSession && (
                 <Pressable style={[styles.fullButton, styles.avatarProfileButton]} onPress={() => { setProfileOpen(false); setAvatarOpen(true); }}>
                   <Text style={styles.fullButtonText}>{avatarDisplaySource ? "Administrar mi avatar" : "Crear mi avatar"}</Text>
@@ -2289,6 +2351,8 @@ export default function App() {
         </View>
       </Modal>
 
+      <SubscriptionPaywall visible={paywallOpen} onClose={() => setPaywallOpen(false)} />
+
       <Modal visible={avatarOpen} transparent animationType="slide" onRequestClose={() => setAvatarOpen(false)}>
         <View style={styles.modalBackdrop}>
           <View style={styles.avatarSheet}>
@@ -2298,7 +2362,7 @@ export default function App() {
               <Text style={styles.modalTitle}>{avatarDraftUri ? "¿Este avatar sí eres tú?" : avatarDisplaySource ? "Actualiza tu avatar." : "Crea tu avatar."}</Text>
               <Text style={styles.modalIntro}>{avatarDraftUri
                 ? "Confirma únicamente si el rostro y las proporciones se parecen a ti. Después se convertirá en la base de todos tus outfits."
-                : "Elige una selfie clara y una foto de cuerpo completo. Vesta creará una base neutral reutilizable para el probador."}</Text>
+                : "Elige una selfie clara y una foto de cuerpo completo. Outfit Club creará una base neutral reutilizable para el probador."}</Text>
 
               {avatarDraftUri ? (
                 <>
@@ -2338,7 +2402,7 @@ export default function App() {
                   </View>
                   <Pressable style={styles.avatarConsentRow} onPress={() => setAvatarConsent((value) => !value)}>
                     <View style={[styles.avatarConsentBox, avatarConsent && styles.avatarConsentBoxActive]}><Text style={styles.avatarConsentCheck}>{avatarConsent ? "✓" : ""}</Text></View>
-                    <Text style={styles.avatarConsentText}>Soy la persona de ambas fotos o tengo su permiso. Entiendo que se enviarán a ChatGPT para crear el avatar; Vesta no las guardará en su nube.</Text>
+                    <Text style={styles.avatarConsentText}>Soy la persona de ambas fotos o tengo su permiso. Entiendo que se enviarán a ChatGPT para crear el avatar; Outfit Club no las guardará en su nube.</Text>
                   </Pressable>
                   <Pressable
                     style={[styles.fullButton, styles.avatarConfirmButton, (!avatarSelfie || !avatarFullBody || !avatarConsent || avatarGenerating) && styles.disabledButton]}
@@ -2437,8 +2501,8 @@ const styles = StyleSheet.create({
   topbar: { height: 58, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line },
   brand: { flexDirection: "row", alignItems: "center", gap: 8 },
   brandMark: { width: 27, height: 27, borderRadius: 14, alignItems: "center", justifyContent: "center", backgroundColor: ink },
-  brandLetter: { color: paper, fontSize: 15, fontFamily: Platform.select({ ios: "Georgia", android: "serif" }) },
-  brandName: { color: ink, fontSize: 12, fontWeight: "700", letterSpacing: 2.4 },
+  brandLetter: { color: paper, fontSize: 7, fontWeight: "900", letterSpacing: .2 },
+  brandName: { color: ink, fontSize: 10, fontWeight: "800", letterSpacing: 1.4 },
   cloudBadge: { marginLeft: "auto", marginRight: 10, flexDirection: "row", alignItems: "center", gap: 6 },
   cloudBadgeText: { color: "#60705B", fontSize: 7, fontWeight: "700", letterSpacing: 0.8 },
   cloudBadgePending: { color: rust },
@@ -2471,6 +2535,7 @@ const styles = StyleSheet.create({
   garmentCard: { flex: 1, position: "relative", marginBottom: 13, backgroundColor: paper, borderWidth: StyleSheet.hairlineWidth, borderColor: "transparent" },
   looksIntro: { color: muted, fontSize: 9, lineHeight: 14, marginTop: -7, marginBottom: 18, maxWidth: 310 },
   outfitCollage: { position: "relative", width: "100%", aspectRatio: 0.72, overflow: "hidden", backgroundColor: "#E9E2D5" },
+  outfitVisualLayer: { position: "absolute", left: 0, right: 0, top: 0, bottom: 0 },
   outfitCollageCell: { position: "absolute", width: "50%", height: "50%", alignItems: "center", justifyContent: "center", borderWidth: StyleSheet.hairlineWidth, borderColor: "rgba(216,209,196,.72)" },
   outfitCollageImage: { width: "92%", height: "92%" },
   outfitCollageFallback: { color: rust, fontSize: 17 },
@@ -2596,18 +2661,6 @@ const styles = StyleSheet.create({
   lookCard: { flex: 1, marginBottom: 14, backgroundColor: "#EAE5DA" },
   lookCopy: { padding: 10, backgroundColor: "#F8F5ED" },
   lookHoldHint: { color: rust, fontSize: 5.5, fontWeight: "900", letterSpacing: 0.55, marginTop: 7 },
-  lookPeekOverlay: { position: "absolute", zIndex: 250, left: 0, right: 0, top: 0, bottom: 78, justifyContent: "center", paddingHorizontal: 18, backgroundColor: "rgba(25,23,20,.32)" },
-  lookPeekCard: { padding: 16, borderRadius: 22, borderWidth: 1, borderColor: "rgba(163,79,49,.24)", backgroundColor: "#F8F5ED", shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 18, shadowOffset: { width: 0, height: 10 } },
-  lookPeekHeading: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 13 },
-  lookPeekHeadingCopy: { flex: 1 },
-  lookPeekEyebrow: { color: rust, fontSize: 6, fontWeight: "900", letterSpacing: 1 },
-  lookPeekTitle: { color: ink, fontSize: 20, lineHeight: 24, marginTop: 4, fontFamily: Platform.select({ ios: "Georgia", android: "serif" }) },
-  lookPeekCount: { width: 34, height: 34, borderRadius: 17, textAlign: "center", lineHeight: 34, color: paper, fontSize: 10, fontWeight: "900", backgroundColor: ink },
-  lookPeekPieces: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  lookPeekPiece: { width: "31%", overflow: "hidden", borderWidth: 1, borderColor: line, borderRadius: 11, backgroundColor: paper },
-  lookPeekPieceName: { color: ink, minHeight: 22, paddingHorizontal: 7, paddingTop: 6, fontSize: 7, lineHeight: 10, fontWeight: "800" },
-  lookPeekPieceMeta: { color: muted, paddingHorizontal: 7, paddingTop: 2, paddingBottom: 7, fontSize: 5.5 },
-  lookPeekRelease: { color: muted, fontSize: 6, fontWeight: "900", letterSpacing: 1, textAlign: "center", marginTop: 14 },
   outfitPieceList: { marginTop: 12, marginBottom: 14, padding: 12, gap: 5, borderWidth: 1, borderColor: line, borderRadius: 12, backgroundColor: "#F8F5ED" },
   outfitPieceName: { color: ink, fontSize: 9, lineHeight: 14 },
   modalBackdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(22,20,17,.45)" },
@@ -2672,6 +2725,13 @@ const styles = StyleSheet.create({
   architectureValue: { color: "#60705B", fontSize: 10, fontWeight: "700" },
   architecturePending: { color: rust, fontSize: 10, fontWeight: "700" },
   profileFootnote: { color: muted, textAlign: "center", fontSize: 9, lineHeight: 14, marginTop: 18 },
+  premiumCard: { flexDirection: "row", alignItems: "center", gap: 11, marginTop: 18, padding: 13, borderWidth: 1, borderColor: "#D5B8AA", borderRadius: 15, backgroundColor: "#F5E9E2" },
+  premiumCardIcon: { width: 38, height: 38, alignItems: "center", justifyContent: "center", borderRadius: 19, backgroundColor: ink },
+  premiumCardIconText: { color: paper, fontSize: 8, fontWeight: "900", letterSpacing: .5 },
+  premiumCardCopy: { flex: 1 },
+  premiumCardEyebrow: { color: rust, fontSize: 6, fontWeight: "900", letterSpacing: .9 },
+  premiumCardTitle: { color: ink, fontSize: 10, fontWeight: "800", marginTop: 4 },
+  premiumCardArrow: { color: rust, fontSize: 25, fontWeight: "300" },
   experimentalNote: { color: rust, textAlign: "center", fontSize: 7, lineHeight: 12, fontWeight: "800", letterSpacing: 0.45, marginTop: 18, marginBottom: 10 },
   experimentalButton: { marginTop: 0 },
   avatarDraftFrame: { width: "100%", aspectRatio: 0.72, marginTop: 9, marginBottom: 14, overflow: "hidden", borderRadius: 20, borderWidth: 1, borderColor: line, backgroundColor: "#E9E2D5" },
