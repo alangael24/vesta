@@ -16,7 +16,7 @@ type ExperimentalPayload = {
   results?: unknown;
 };
 
-const supportedModels = new Set(["gpt-5.4-mini", "gpt-5.4", "gpt-5.5"]);
+const supportedModels = new Set(["gpt-5.6-luna", "gpt-5.4-mini", "gpt-5.4", "gpt-5.5"]);
 const categories = new Set(["tops", "layers", "bottoms", "footwear", "accessories", "one_piece", "unknown"]);
 const visibilities = new Set(["clear", "partial", "held"]);
 

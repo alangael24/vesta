@@ -2,7 +2,7 @@ import * as ImageManipulator from "expo-image-manipulator";
 import type * as ImagePicker from "expo-image-picker";
 import { codexFetch } from "./codex-auth";
 
-export const EXPERIMENTAL_CODEX_MODEL = "gpt-5.4-mini";
+export const EXPERIMENTAL_CODEX_MODEL = "gpt-5.6-luna";
 
 export type ExperimentalPhoto = {
   id: string;
