@@ -16,6 +16,12 @@
     },
     "android": {
       "package": "com.alangael.vesta",
+      "versionCode": 1,
+      "blockedPermissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.SYSTEM_ALERT_WINDOW"
+      ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#F3EFE5"
@@ -28,6 +34,7 @@
         "expo-image-picker",
         {
           "photosPermission": "Vesta accede únicamente a las fotos que elijas para crear tu armario privado.",
+          "cameraPermission": false,
           "microphonePermission": false
         }
       ]

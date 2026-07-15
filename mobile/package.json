@@ -6,6 +6,10 @@
   "scripts": {
     "start": "expo start",
     "android": "expo run:android",
+    "android:release": "cd android && NODE_ENV=production ./gradlew assembleRelease",
+    "android:release:arm64": "cd android && NODE_ENV=production ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a",
+    "android:bundle": "cd android && NODE_ENV=production ./gradlew bundleRelease",
+    "prebuild:android": "expo prebuild --platform android",
     "ios": "expo run:ios",
     "typecheck": "tsc --noEmit"
   },
@@ -19,7 +23,8 @@
     "expo-secure-store": "~57.0.0",
     "expo-status-bar": "~57.0.0",
     "react": "19.2.3",
-    "react-native": "0.86.0"
+    "react-native": "0.86.0",
+    "react-native-safe-area-context": "~5.7.0"
   },
   "devDependencies": {
     "@expo/ngrok": "4.1.3",

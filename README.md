@@ -1,4 +1,20 @@
-# vinext-starter
+# Vesta
+
+Vesta es un armario privado con probador virtual. El repositorio contiene la
+aplicación web y clientes móviles React Native para iOS y Android.
+
+## Aplicación Android
+
+El proyecto Android nativo, su configuración de compilación y las instrucciones
+para crear APK/AAB están en [`mobile/README.md`](mobile/README.md).
+
+```bash
+cd mobile
+pnpm install --frozen-lockfile
+pnpm android
+```
+
+## Aplicación web
 
 A clean full-stack starter running on
 [vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
