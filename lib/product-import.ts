@@ -65,20 +65,28 @@ export function parseProductPage(html: string, pageUrl: URL) {
       || (documentTitle ? decodeHtml(documentTitle.replace(/<[^>]+>/gu, " ")) : "")
       || productNameFromPath(pageUrl),
   );
-  const rawImage = metadata.get("og:image:secure_url")
-    || metadata.get("og:image")
-    || metadata.get("twitter:image")
-    || metadata.get("twitter:image:src")
-    || structured?.image;
-  let imageUrl: URL | null = null;
-  if (rawImage) {
+  const rawImages = [
+    metadata.get("og:image:secure_url"),
+    metadata.get("og:image"),
+    metadata.get("twitter:image"),
+    metadata.get("twitter:image:src"),
+    structured?.image,
+    ...htmlImageCandidates(html, title),
+  ].filter((value): value is string => Boolean(value));
+  const imageUrls: URL[] = [];
+  const seen = new Set<string>();
+  for (const rawImage of rawImages) {
     try {
-      imageUrl = new URL(decodeHtml(rawImage), pageUrl);
+      const imageUrl = new URL(decodeHtml(rawImage), pageUrl);
+      if (!seen.has(imageUrl.toString())) {
+        seen.add(imageUrl.toString());
+        imageUrls.push(imageUrl);
+      }
     } catch {
-      imageUrl = null;
+      // A malformed fallback image should not hide the next valid candidate.
     }
   }
-  return { title, imageUrl };
+  return { title, imageUrl: imageUrls[0] || null, imageUrls };
 }
 
 export function classifyInternetGarment(title: string, productUrl: URL, placement: ProductPlacement = "auto"): InternetGarmentClassification {
@@ -140,6 +148,39 @@ function htmlAttributes(tag: string) {
     if (key !== "meta") attrs[key] = match[2] ?? match[3] ?? match[4] ?? "";
   }
   return attrs;
+}
+
+function htmlImageCandidates(html: string, title: string) {
+  const candidates: Array<{ value: string; score: number }> = [];
+  for (const tag of html.match(/<link\b[^>]*>/giu) || []) {
+    const attrs = htmlAttributes(tag);
+    if (/^(?:image_src|preload)$/iu.test(attrs.rel || "") && attrs.href) {
+      candidates.push({ value: attrs.href, score: attrs.rel.toLowerCase() === "image_src" ? 90 : 20 });
+    }
+  }
+  const titleWords = title.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= 4);
+  for (const tag of html.match(/<img\b[^>]*>/giu) || []) {
+    const attrs = htmlAttributes(tag);
+    const value = attrs["data-zoom-image"] || attrs["data-large-image"] || attrs["data-src"] || largestSrcset(attrs.srcset || attrs["data-srcset"]) || attrs.src;
+    if (!value || /^data:/iu.test(value)) continue;
+    const description = `${attrs.id || ""} ${attrs.class || ""} ${attrs.alt || ""} ${value}`.toLowerCase();
+    if (/logo|icon|sprite|avatar|badge|payment|placeholder|spinner/u.test(description)) continue;
+    let score = 0;
+    if (/product|pdp|gallery|main|primary|hero|zoom/u.test(description)) score += 50;
+    if (titleWords.some((word) => description.includes(word))) score += 20;
+    const width = Number(attrs.width);
+    const height = Number(attrs.height);
+    if (width >= 500 || height >= 500) score += 15;
+    if (/thumb|swatch|recommend|related|carousel/u.test(description)) score -= 20;
+    candidates.push({ value, score });
+  }
+  return candidates.sort((a, b) => b.score - a.score).map((candidate) => decodeHtml(candidate.value));
+}
+
+function largestSrcset(value: string | undefined) {
+  if (!value) return "";
+  const entries = value.split(",").map((entry) => entry.trim()).filter(Boolean);
+  return entries.at(-1)?.split(/\s+/u)[0] || "";
 }
 
 function structuredProduct(html: string): { name?: string; image?: string } | null {

@@ -65,6 +65,16 @@ export type ExperimentalTryOnGarment = {
   imageBase64: string;
 };
 
+export async function prepareInternetTryOnReference(uri: string) {
+  const result = await ImageManipulator.manipulateAsync(uri, [{ resize: { width: 1600 } }], {
+    base64: true,
+    compress: 1,
+    format: ImageManipulator.SaveFormat.PNG,
+  });
+  if (!result.base64) throw new Error("product_image_conversion_failed");
+  return result.base64;
+}
+
 const inventorySchema = {
   type: "object",
   additionalProperties: false,

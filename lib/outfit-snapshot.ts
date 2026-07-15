@@ -7,6 +7,8 @@ export type OutfitPieceSnapshot = {
   material: string;
   description: string;
   confidence: number | null;
+  sourceType?: "photos" | "internet";
+  sourceUrl?: string | null;
 };
 
 export function snapshotGarment(garment: {
@@ -18,6 +20,8 @@ export function snapshotGarment(garment: {
   material: string | null;
   description: string | null;
   confidence: number | null;
+  sourceType?: "photos" | "internet";
+  sourceUrl?: string | null;
 }): OutfitPieceSnapshot {
   return {
     id: garment.id,
@@ -28,6 +32,8 @@ export function snapshotGarment(garment: {
     material: garment.material || "Sin confirmar",
     description: garment.description || "Prenda de tu armario privado.",
     confidence: garment.confidence,
+    sourceType: garment.sourceType,
+    sourceUrl: garment.sourceUrl,
   };
 }
 
@@ -46,6 +52,9 @@ export function parsePiecesSnapshot(raw: string | null): OutfitPieceSnapshot[] |
 function isPieceSnapshot(value: unknown): value is OutfitPieceSnapshot {
   if (!value || typeof value !== "object") return false;
   const item = value as Record<string, unknown>;
-  return ["id", "name", "category", "type", "color", "material", "description"]
+  const requiredFieldsAreValid = ["id", "name", "category", "type", "color", "material", "description"]
     .every((key) => typeof item[key] === "string");
+  const sourceTypeIsValid = item.sourceType === undefined || item.sourceType === "photos" || item.sourceType === "internet";
+  const sourceUrlIsValid = item.sourceUrl === undefined || item.sourceUrl === null || typeof item.sourceUrl === "string";
+  return requiredFieldsAreValid && sourceTypeIsValid && sourceUrlIsValid;
 }

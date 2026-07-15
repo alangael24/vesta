@@ -12,9 +12,12 @@ test("stores a durable garment description without requiring the live garment", 
     material: null,
     description: "Adidas con cierre",
     confidence: 94,
+    sourceType: "internet",
+    sourceUrl: "https://shop.example.com/red-hoodie",
   });
   assert.deepEqual(parsePiecesSnapshot(JSON.stringify([snapshot])), [snapshot]);
   assert.equal(snapshot.material, "Sin confirmar");
+  assert.equal(snapshot.sourceType, "internet");
 });
 
 test("rejects malformed historical snapshots", () => {

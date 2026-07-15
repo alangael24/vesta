@@ -29,7 +29,7 @@ export function garmentPreviewKey(ownerId: string, garmentId: string) {
 }
 
 export function internetGarmentKey(ownerId: string, garmentId: string) {
-  return `owners/${ownerId}/garments/${garmentId}/internet-reference.png`;
+  return `owners/${ownerId}/garments/${garmentId}/internet-reference`;
 }
 
 export function outfitRenderKey(ownerId: string, outfitId: string) {

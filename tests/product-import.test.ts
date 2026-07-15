@@ -34,6 +34,18 @@ test("falls back to Product JSON-LD and classifies common garments", () => {
   });
 });
 
+test("falls back to a likely product img when a store omits social metadata", () => {
+  const page = new URL("https://shop.example.com/products/essential-cap");
+  const parsed = parseProductPage(`
+    <title>Essential Cap</title>
+    <img class="site-logo" src="/logo.png" width="200">
+    <img class="pdp-main-product-image" alt="Essential Cap black" data-src="/media/cap-black.jpg" width="1200">
+    <img class="related-product-thumb" src="/media/other.jpg" width="600">
+  `, page);
+  assert.equal(parsed.imageUrl?.toString(), "https://shop.example.com/media/cap-black.jpg");
+  assert.equal(parsed.imageUrls.length, 2);
+});
+
 test("a placement hint overrides an ambiguous product name", () => {
   const result = classifyInternetGarment("Essential 59FIFTY", new URL("https://shop.example.com/item/123"), "head");
   assert.equal(result.category, "accessories");

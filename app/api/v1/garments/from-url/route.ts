@@ -3,7 +3,6 @@ import { getDb } from "@/db";
 import { garments } from "@/db/schema";
 import { requireDevice } from "@/lib/device-auth";
 import { hashSecret } from "@/lib/crypto";
-import { getImagesBinding } from "@/lib/openai";
 import {
   canonicalizeProductUrl,
   classifyInternetGarment,
@@ -55,41 +54,33 @@ export async function POST(request: Request) {
     const pageType = page.response.headers.get("content-type")?.toLowerCase() || "";
     let title: string;
     let imageUrl: URL;
-    let imageResponse: Response;
+    let imageBytes: Uint8Array;
+    let imageType: string;
 
     if (pageType.startsWith("image/")) {
       title = decodeURIComponent(page.finalUrl.pathname.split("/").filter(Boolean).at(-1) || "Prenda de internet").replace(/[-_]+/gu, " ");
       imageUrl = page.finalUrl;
-      imageResponse = page.response;
+      imageBytes = await readLimited(page.response, maximumImageBytes, "product_image_too_large");
+      imageType = supportedImageType(imageBytes) || "";
+      if (!imageType) throw new ProductImportError("product_image_invalid");
     } else {
       if (!pageType.includes("text/html") && !pageType.includes("application/xhtml+xml")) throw new ProductImportError("product_page_invalid");
       const html = new TextDecoder().decode(await readLimited(page.response, maximumPageBytes, "product_page_too_large"));
       const metadata = parseProductPage(html, page.finalUrl);
-      if (!metadata.imageUrl) throw new ProductImportError("product_image_missing");
-      if (!isSafeRemoteUrl(metadata.imageUrl)) throw new ProductImportError("product_image_unsafe");
+      if (!metadata.imageUrls.length) throw new ProductImportError("product_image_missing");
       title = metadata.title;
-      imageUrl = metadata.imageUrl;
-      imageResponse = (await fetchRemote(imageUrl, "image/avif,image/webp,image/png,image/jpeg,image/*", page.finalUrl)).response;
+      const fetchedImage = await fetchFirstUsableImage(metadata.imageUrls, page.finalUrl);
+      imageUrl = fetchedImage.url;
+      imageBytes = fetchedImage.bytes;
+      imageType = fetchedImage.type;
     }
-
-    const imageType = imageResponse.headers.get("content-type")?.toLowerCase() || "";
-    if (!imageType.startsWith("image/")) throw new ProductImportError("product_image_invalid");
-    const imageBytes = await readLimited(imageResponse, maximumImageBytes, "product_image_too_large");
-    const inputStream = new Response(imageBytes, { headers: { "Content-Type": imageType } }).body;
-    if (!inputStream) throw new ProductImportError("product_image_invalid");
-    const transformed = await getImagesBinding().input(inputStream)
-      .transform({ width: 1600, height: 1600, fit: "scale-down" })
-      .output({ format: "image/png", quality: 100 });
-    const normalized = transformed.response();
-    const normalizedBytes = await normalized.arrayBuffer();
-    if (!normalized.ok || !normalizedBytes.byteLength) throw new ProductImportError("product_image_invalid");
 
     const classification = classifyInternetGarment(title, productUrl, placement);
     const garmentId = `garment_${crypto.randomUUID()}`;
     const key = internetGarmentKey(identity.ownerId, garmentId);
     const now = new Date().toISOString();
-    await getMediaBucket().put(key, normalizedBytes, {
-      httpMetadata: { contentType: "image/png" },
+    await getMediaBucket().put(key, imageBytes, {
+      httpMetadata: { contentType: imageType },
       customMetadata: {
         ownerId: identity.ownerId,
         garmentId,
@@ -238,6 +229,43 @@ async function fetchRemote(initialUrl: URL, accept: string, referer?: URL) {
     return { response, finalUrl: url };
   }
   throw new ProductImportError("product_redirect_invalid");
+}
+
+async function fetchFirstUsableImage(candidates: URL[], referer: URL) {
+  let lastError: ProductImportError | null = null;
+  for (const url of candidates.slice(0, 8)) {
+    if (!isSafeRemoteUrl(url)) continue;
+    try {
+      const result = await fetchRemote(url, "image/webp,image/png,image/jpeg,image/*;q=0.7", referer);
+      const declaredType = normalizedContentType(result.response.headers.get("content-type"));
+      if (declaredType.startsWith("image/") && !supportedDeclaredImageTypes.has(declaredType)) {
+        await result.response.body?.cancel().catch(() => undefined);
+        continue;
+      }
+      const bytes = await readLimited(result.response, maximumImageBytes, "product_image_too_large");
+      const type = supportedImageType(bytes);
+      if (!type) continue;
+      return { url: result.finalUrl, bytes, type };
+    } catch (error) {
+      lastError = error instanceof ProductImportError ? error : new ProductImportError("product_unreachable");
+    }
+  }
+  throw lastError || new ProductImportError("product_image_invalid");
+}
+
+const supportedDeclaredImageTypes = new Set(["image/jpeg", "image/png", "image/webp", "application/octet-stream", ""]);
+
+function normalizedContentType(value: string | null) {
+  return (value || "").split(";", 1)[0].trim().toLowerCase();
+}
+
+function supportedImageType(bytes: Uint8Array) {
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "image/png";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes.length >= 12
+    && String.fromCharCode(...bytes.slice(0, 4)) === "RIFF"
+    && String.fromCharCode(...bytes.slice(8, 12)) === "WEBP") return "image/webp";
+  return null;
 }
 
 async function readLimited(response: Response, maximumBytes: number, errorCode: string) {

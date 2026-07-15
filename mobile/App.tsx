@@ -38,6 +38,7 @@ import {
   generateExperimentalAvatarImage,
   generateExperimentalGarmentImage,
   generateExperimentalTryOnImage,
+  prepareInternetTryOnReference,
 } from "./experimental-inventory";
 
 type ViewName = "closet" | "builder" | "looks";
@@ -830,7 +831,9 @@ export default function App() {
           });
           if (download.status < 200 || download.status >= 300) throw new Error(`outfit_garment_download_${download.status}`);
           temporaryPaths.push(download.uri);
-          imageBase64 = await FileSystem.readAsStringAsync(download.uri, { encoding: FileSystem.EncodingType.Base64 });
+          imageBase64 = item.sourceType === "internet"
+            ? await prepareInternetTryOnReference(download.uri)
+            : await FileSystem.readAsStringAsync(download.uri, { encoding: FileSystem.EncodingType.Base64 });
           if (tryOnGarmentBase64.current.size >= 12) {
             const oldestKey = tryOnGarmentBase64.current.keys().next().value;
             if (oldestKey) tryOnGarmentBase64.current.delete(oldestKey);
@@ -1499,7 +1502,9 @@ export default function App() {
           });
           if (download.status < 200 || download.status >= 300) throw new Error(`try_on_garment_download_${download.status}`);
           temporaryPaths.push(download.uri);
-          imageBase64 = await FileSystem.readAsStringAsync(download.uri, { encoding: FileSystem.EncodingType.Base64 });
+          imageBase64 = layer.item.sourceType === "internet"
+            ? await prepareInternetTryOnReference(download.uri)
+            : await FileSystem.readAsStringAsync(download.uri, { encoding: FileSystem.EncodingType.Base64 });
           if (tryOnGarmentBase64.current.size >= 12) {
             const oldestKey = tryOnGarmentBase64.current.keys().next().value;
             if (oldestKey) tryOnGarmentBase64.current.delete(oldestKey);
