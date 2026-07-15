@@ -155,6 +155,7 @@ type CloudAvatar = {
 type CloudOutfit = Omit<Outfit, "pieces"> & { pieces: CloudGarment[] };
 
 type ImportStage = "idle" | "waiting" | "staging" | "uploading" | "analyzing" | "complete" | "error";
+type AppNotice = { id: number; tone: "success" | "error" | "info"; title: string; message?: string };
 
 type QueuedImportPhoto = {
   asset: ImagePicker.ImagePickerAsset;
@@ -604,6 +605,7 @@ function productImportErrorMessage(code: string) {
 }
 
 export default function App() {
+  const [notice, setNotice] = useState<AppNotice | null>(null);
   const [view, setView] = useState<ViewName>("closet");
   const [filter, setFilter] = useState<Category>("all");
   const [importOpen, setImportOpen] = useState(false);
@@ -668,6 +670,16 @@ export default function App() {
   const avatarOnboardingOffered = useRef(false);
   const legacyAvatarMigrationStarted = useRef(false);
 
+  function showNotice(title: string, message?: string, tone: AppNotice["tone"] = "info") {
+    setNotice({ id: Date.now(), tone, title, message });
+  }
+
+  useEffect(() => {
+    if (!notice) return;
+    const timeout = setTimeout(() => setNotice((current) => current?.id === notice.id ? null : current), notice.tone === "error" ? 5200 : 3200);
+    return () => clearTimeout(timeout);
+  }, [notice]);
+
   const activeWardrobe = cloudWardrobe;
 
   const visibleItems = useMemo(
@@ -718,7 +730,7 @@ export default function App() {
       setCloudSession(session);
     } catch {
       automaticCloudConnectionStarted.current = false;
-      Alert.alert("No se pudo preparar tu cuenta", "Outfit Club volverá a intentarlo cuando abras la app o subas fotos.");
+      showNotice("Reconectando tu cuenta", "Volveremos a intentarlo automáticamente.", "error");
     } finally {
       setPairing(false);
     }
@@ -967,8 +979,8 @@ export default function App() {
     }
     if (!codexConnected) {
       Alert.alert(
-        "Conecta ChatGPT para crear tus fotos",
-        "Las combinaciones se guardan sin costo de modelo. ChatGPT solo se utiliza para crear la foto real de ti usando cada Look.",
+        "Conecta tu cuenta para crear las fotos",
+        "Tus combinaciones ya están guardadas. La conexión sólo se usa al crear una foto nueva.",
         [
           { text: "Ahora no", style: "cancel" },
           { text: "Conectar", onPress: connectCodexExperiment },
@@ -995,9 +1007,9 @@ export default function App() {
       }
       if (!response.ok) {
         if (result.error === "outfit_wardrobe_too_small") {
-          Alert.alert("Faltan prendas", "Outfit Club necesita al menos una prenda de arriba y un pantalón con recorte listo.");
+          showNotice("Faltan prendas", "Añade una prenda de arriba y un pantalón para crear nuevos Looks.");
         } else if (result.error === "outfit_combinations_exhausted") {
-          Alert.alert("Ya encontraste todas", "No quedan combinaciones nuevas con las prendas que están listas ahora mismo.");
+          showNotice("Ya encontraste todas", "Añade otra prenda para descubrir combinaciones nuevas.");
         } else {
           throw new Error(result.error || "outfit_generation_failed");
         }
@@ -1010,8 +1022,8 @@ export default function App() {
       if (!createdOutfits.length) throw new Error("created_outfits_missing");
       await completeOutfitPhotographs(createdOutfits);
     } catch (error) {
-      const detail = error instanceof Error ? error.message : "unknown";
-      Alert.alert("No se crearon los Looks", `Tu armario sigue intacto y las combinaciones guardadas se pueden reintentar. Detalle técnico: ${detail}`);
+      console.info("[Outfit Club looks]", error instanceof Error ? error.message : "unknown");
+      showNotice("No se crearon los Looks", "Tu armario sigue intacto. Puedes reintentarlo.", "error");
     } finally {
       setOutfitGenerationProgress(null);
       setOutfitGenerating(false);
@@ -1027,8 +1039,8 @@ export default function App() {
     }
     if (!codexConnected) {
       Alert.alert(
-        "Conecta ChatGPT para crear esta foto",
-        "Outfit Club necesita la sesión experimental únicamente mientras te viste con las prendas seleccionadas.",
+        "Conecta tu cuenta para crear esta foto",
+        "La conexión sólo se utiliza mientras creamos la imagen con las prendas elegidas.",
         [
           { text: "Ahora no", style: "cancel" },
           { text: "Conectar", onPress: connectCodexExperiment },
@@ -1073,18 +1085,13 @@ export default function App() {
     }
     if (completed > 0 && cloudSession) await loadOutfits(cloudSession).catch(() => undefined);
     if (completed === targets.length) {
-      Alert.alert(
-        targets.length === 1 ? "Tu Look está listo" : "Tus Looks están listos",
-        targets.length === 1
-          ? "La foto tuya usando el outfit quedó guardada en tu nube privada."
-          : `${completed} fotos tuyas quedaron guardadas en tu nube privada. Abrirlas otra vez no vuelve a generar ni gastar.`,
-      );
+      showNotice(targets.length === 1 ? "Tu Look está listo" : "Tus Looks están listos", `${completed} ${completed === 1 ? "foto quedó guardada" : "fotos quedaron guardadas"} en Looks.`, "success");
     } else if (completed > 0) {
-      Alert.alert("Looks parcialmente listos", `${completed} de ${targets.length} fotos quedaron listas. Las demás siguen pendientes y se pueden reintentar.`);
+      showNotice("Looks parcialmente listos", `${completed} de ${targets.length} quedaron listos. Puedes reintentar los demás.`, "error");
     } else {
-      Alert.alert("Las fotos no terminaron", failed > 0
-        ? "Las combinaciones siguen guardadas. Revisa la conexión de ChatGPT y toca Crear fotos para reintentarlas."
-        : "Las combinaciones siguen guardadas y se pueden reintentar.");
+      showNotice("Las fotos no terminaron", failed > 0
+        ? "Las combinaciones siguen guardadas. Revisa tu conexión y toca Crear fotos para reintentarlas."
+        : "Las combinaciones siguen guardadas y se pueden reintentar.", "error");
     }
   }
 
@@ -1230,7 +1237,7 @@ export default function App() {
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permission.granted) {
-        Alert.alert("Permiso necesario", "Outfit Club solo puede ver las fotos que tú selecciones. Activa el permiso para continuar.");
+        showNotice("Permiso necesario", "Activa Fotos para seleccionar las prendas que quieras importar.", "error");
         return;
       }
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -1269,7 +1276,7 @@ export default function App() {
   const pickAvatarReference = async (kind: "selfie" | "body") => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert("Permiso necesario", "Outfit Club solo verá la foto que selecciones para crear tu avatar.");
+      showNotice("Permiso necesario", "Activa Fotos para elegir la referencia de tu avatar.", "error");
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -1297,8 +1304,8 @@ export default function App() {
     if (!avatarSelfie || !avatarFullBody || !avatarConsent || avatarGenerating) return;
     if (!codexConnected) {
       Alert.alert(
-        "Conecta ChatGPT para crear tu avatar",
-        "Tus referencias se utilizan solo durante esta generación y el resultado se guarda en tu cuenta privada.",
+        "Conecta tu cuenta para crear tu avatar",
+        "Tus referencias se utilizan sólo durante la creación y el resultado queda en tu cuenta privada.",
         [
           { text: "Ahora no", style: "cancel" },
           { text: "Conectar", onPress: connectCodexExperiment },
@@ -1318,7 +1325,8 @@ export default function App() {
     } catch (error) {
       const detail = error instanceof Error ? error.message : "unknown";
       if (/codex_not_connected|token_refresh|401/u.test(detail)) setCodexConnected(false);
-      Alert.alert("El avatar no terminó", `Tus fotos siguen en este teléfono y puedes reintentarlo. Detalle técnico: ${detail}`);
+      console.info("[Outfit Club avatar]", detail);
+      showNotice("El avatar no terminó", "Tus fotos siguen en este teléfono. Puedes reintentarlo.", "error");
     } finally {
       setAvatarGenerating(false);
     }
@@ -1342,10 +1350,10 @@ export default function App() {
       setAvatarConsent(false);
       setAvatarOpen(false);
       setProfileOpen(false);
-      Alert.alert("Avatar guardado", "Ya puedes probar prendas y generar Looks. Las fotos originales no se subieron a la nube de Outfit Club.");
+      showNotice("Avatar guardado", "Ya puedes probar prendas y generar Looks.", "success");
     } catch (error) {
-      const detail = error instanceof Error ? error.message : "unknown";
-      Alert.alert("No se guardó el avatar", `El borrador sigue disponible para reintentar. Detalle técnico: ${detail}`);
+      console.info("[Outfit Club avatar save]", error instanceof Error ? error.message : "unknown");
+      showNotice("No se guardó el avatar", "El borrador sigue disponible para reintentar.", "error");
     } finally {
       setAvatarSaving(false);
     }
@@ -1364,7 +1372,7 @@ export default function App() {
           onPress: async () => {
             const response = await cloudFetch(cloudSession, "/api/v1/avatar", { method: "DELETE" });
             if (!response.ok) {
-              Alert.alert("No se eliminó", "Vuelve a intentarlo cuando la cuenta esté sincronizada.");
+              showNotice("No se eliminó", "Vuelve a intentarlo cuando la cuenta esté sincronizada.", "error");
               return;
             }
             const cachedPath = avatarCachePath(cloudSession);
@@ -1374,7 +1382,7 @@ export default function App() {
             tryOnAvatarBase64.current = null;
             await clearTryOn();
             setAvatarOpen(false);
-            Alert.alert("Avatar eliminado", "Tus Looks guardados permanecen intactos.");
+            showNotice("Avatar eliminado", "Tus Looks guardados permanecen intactos.", "success");
           },
         },
       ],
@@ -1384,7 +1392,7 @@ export default function App() {
   const pasteProductUrl = async () => {
     const value = (await Clipboard.getStringAsync()).trim();
     if (!value) {
-      Alert.alert("No hay un enlace copiado", "Copia primero la página del producto y vuelve a intentarlo.");
+      showNotice("No hay un enlace copiado", "Copia primero la página del producto.");
       return;
     }
     setProductUrl(value);
@@ -1393,11 +1401,11 @@ export default function App() {
   const importProductFromUrl = async () => {
     if (productImporting) return;
     if (!cloudSession) {
-      Alert.alert("Preparando tu cuenta", "Outfit Club necesita terminar la conexión privada antes de importar esta prenda.");
+      showNotice("Preparando tu cuenta", "La importación comenzará cuando termine la conexión privada.");
       return;
     }
     if (!productUrl.trim()) {
-      Alert.alert("Pega el enlace del producto", "Puede ser una gorra, playera, chamarra, pantalón o calzado de cualquier tienda pública.");
+      showNotice("Pega el enlace del producto", "Aceptamos prendas de cualquier tienda pública.");
       return;
     }
     setProductImporting(true);
@@ -1430,15 +1438,11 @@ export default function App() {
           { text: "Crear avatar", onPress: () => setAvatarOpen(true) },
         ]);
       } else {
-        Alert.alert(
-          "Prenda añadida al outfit",
-          "Ahora combínala con las prendas de tu armario. Cuando el outfit esté completo, toca “Probar outfit” para generar una sola imagen.",
-          [{ text: "Seguir armando" }],
-        );
+        showNotice("Prenda añadida al outfit", "Combínala y toca “Probar outfit” cuando esté listo.", "success");
       }
     } catch (error) {
       const code = error instanceof Error ? error.message : "product_import_failed";
-      Alert.alert("No pudimos leer esa prenda", productImportErrorMessage(code));
+      showNotice("No pudimos leer esa prenda", productImportErrorMessage(code), "error");
     } finally {
       setProductImporting(false);
     }
@@ -1463,9 +1467,9 @@ export default function App() {
       await Linking.openURL(CODEX_DEVICE_URL);
       await completeDeviceAuthorization(pending);
       setCodexConnected(true);
-      Alert.alert("ChatGPT conectado", "La sesión experimental quedó guardada en el Keychain de este iPhone.");
+      showNotice("Conexión lista", "Ya puedes crear tu avatar y tus Looks.", "success");
     } catch {
-      Alert.alert("No se completó la conexión", "Puedes volver a intentarlo. No se guardó ninguna sesión incompleta.");
+      showNotice("No se completó la conexión", "Puedes volver a intentarlo.", "error");
     } finally {
       setCodexConnecting(false);
     }
@@ -1474,7 +1478,7 @@ export default function App() {
   const disconnectCodexExperiment = async () => {
     await logoutCodex();
     setCodexConnected(false);
-    Alert.alert("ChatGPT desconectado", "Los tokens experimentales se eliminaron del Keychain.");
+    showNotice("Cuenta desconectada", "La sesión se eliminó de este iPhone.", "success");
   };
 
   const uploadBatch = async (queueOverride?: PendingImportQueue) => {
@@ -1749,13 +1753,13 @@ export default function App() {
 
   const chooseReconstruction = (item: WardrobeItem) => {
     if (item.isBasic) {
-      Alert.alert("Básico reconocido", "Outfit Club conservará la foto real de esta prenda y no gastará una generación de ImageGen.");
+      showNotice("Básico reconocido", "Conservamos la foto real sin gastar una generación.");
       return;
     }
     if (codexConnected && item.evidencePath) {
       Alert.alert(
         "Crear imagen de catálogo",
-        "GPT Image 2 aislará esta prenda a partir de tu foto. Outfit Club quitará el fondo para integrarla exactamente con el color del armario. La foto original seguirá guardada como evidencia privada.",
+        "Outfit Club aislará la prenda y quitará el fondo. La foto original seguirá guardada de forma privada para que puedas compararla.",
         [
           { text: "Ahora no", style: "cancel" },
           { text: "Crear", onPress: () => startExperimentalReconstruction(item) },
@@ -1765,8 +1769,8 @@ export default function App() {
     }
     const heldNote = item.status === "held" ? " La evidencia es débil; si continúas, el resultado quedará obligado a revisión." : "";
     Alert.alert(
-      "Crear PNG transparente",
-      `Esta operación reconstruye una sola prenda con GPT Image 2 y después verifica el resultado contra tus fotos.${heldNote}`,
+      "Crear imagen transparente",
+      `Outfit Club preparará una sola prenda y comprobará el resultado contra tus fotos.${heldNote}`,
       [
         { text: "Ahora no", style: "cancel" },
         { text: "Borrador económico", onPress: () => startReconstruction(item, "draft") },
@@ -1813,10 +1817,10 @@ export default function App() {
       const items = await loadWardrobe(cloudSession);
       const updated = items?.find((candidate) => candidate.id === item.id);
       if (updated) setSelectedItem(updated);
-      Alert.alert("Imagen lista", "Outfit Club creó un recorte transparente que se integra con el fondo del armario. Compáralo con la evidencia antes de aprobarlo.");
+      showNotice("Imagen lista", "El recorte transparente ya está en tu armario.", "success");
     } catch (error) {
-      const detail = error instanceof Error ? error.message : "unknown";
-      Alert.alert("No se creó la imagen", `La evidencia original sigue intacta. Detalle técnico: ${detail}`);
+      console.info("[Outfit Club garment image]", error instanceof Error ? error.message : "unknown");
+      showNotice("No se creó la imagen", "La foto original sigue intacta. Puedes reintentarlo.", "error");
     } finally {
       setReconstructingId(null);
     }
@@ -1838,7 +1842,7 @@ export default function App() {
       });
       const result = await response.json() as { error?: string; status?: string; qaStatus?: string };
       if (response.status === 503 && result.error === "processing_not_configured") {
-        Alert.alert("PNG pendiente", "La clave de procesamiento todavía no está conectada. No se generó ningún cargo ni se enviaron imágenes.");
+        showNotice("Imagen pendiente", "El procesamiento no está disponible todavía. No se realizó ningún cargo.", "error");
         return;
       }
       if (!response.ok) throw new Error(result.error || "reconstruction_failed");
@@ -1846,12 +1850,12 @@ export default function App() {
       const refreshed = items?.find((entry) => entry.id === item.id);
       if (refreshed) setSelectedItem(refreshed);
       if (result.status === "approved") {
-        Alert.alert("PNG verificado", "La reconstrucción pasó las comprobaciones técnicas y visuales.");
+        showNotice("Imagen verificada", "La prenda ya está lista para usar.", "success");
       } else {
-        Alert.alert("Necesita revisión", "Outfit Club conservó la evidencia y marcó el resultado para revisión en lugar de aprobarlo automáticamente.");
+        showNotice("Necesita revisión", "Conservamos la foto original para que puedas comparar el resultado.");
       }
     } catch {
-      Alert.alert("No se creó el PNG", "La prenda y sus fotos siguen intactas. Puedes reintentar sin volver a subirlas.");
+      showNotice("No se creó la imagen", "La prenda y sus fotos siguen intactas. Puedes reintentar.", "error");
     } finally {
       setReconstructingId(null);
     }
@@ -1950,7 +1954,7 @@ export default function App() {
       } catch {
         cloudUploadMs = Date.now() - cloudSaveStartedAt;
         setTryOnSavedOutfitId(null);
-        Alert.alert("Look listo, guardado pendiente", "La foto quedó en tu probador, pero no alcanzó a sincronizarse con Looks. Puedes volver a intentarlo sin cambiar las prendas.");
+        showNotice("Look listo, guardado pendiente", "La foto está en tu probador y volveremos a intentar guardarla.", "error");
       }
       await recordAvatarGenerationAudit({
         recordedAt: new Date().toISOString(),
@@ -1977,11 +1981,12 @@ export default function App() {
         ]);
       } else if (/codex_not_connected|token_refresh|401/u.test(detail)) {
         setCodexConnected(false);
-        Alert.alert("Vuelve a conectar ChatGPT", "La sesión experimental expiró. Reconéctala desde tu perfil y vuelve a soltar la prenda.");
+        showNotice("Vuelve a conectar tu cuenta", "La sesión expiró. Reconéctala desde tu perfil.", "error");
       } else if (detail === "moderation_blocked") {
-        Alert.alert("No se pudo crear esta prueba", "La generación fue detenida por una comprobación de seguridad. Tu avatar y tus prendas siguen intactos.");
+        showNotice("No se pudo crear esta prueba", "Tu avatar y tus prendas siguen intactos.", "error");
       } else {
-        Alert.alert("La prueba realista no terminó", `No se cambió tu look anterior. Detalle técnico: ${detail}`);
+        console.info("[Outfit Club try-on]", detail);
+        showNotice("La prueba no terminó", "Tu Look anterior no cambió. Puedes reintentarlo.", "error");
       }
     } finally {
       await Promise.all(temporaryPaths.map((path) => FileSystem.deleteAsync(path, { idempotent: true }).catch(() => undefined)));
@@ -1992,7 +1997,7 @@ export default function App() {
   const addToTryOn = (item: WardrobeItem) => {
     if (tryOnRendering) return;
     if (!cloudSession || !item.imagePath || item.imageKind !== "cutout") {
-      Alert.alert("Recorte pendiente", "Esta prenda necesita un PNG transparente antes de poder colocarla sobre tu avatar.");
+      showNotice("Imagen pendiente", "Prepara el recorte de esta prenda antes de usarla en tu avatar.");
       return;
     }
     const existing = tryOnLayers.find((layer) => layer.item.id === item.id);
@@ -2087,8 +2092,8 @@ export default function App() {
     }
     if (!codexConnected) {
       Alert.alert(
-        "Conecta ChatGPT para probar el outfit",
-        "Puedes preparar combinaciones sin conexión. ChatGPT solo se utiliza cuando generas la imagen vestida.",
+        "Conecta tu cuenta para probar el outfit",
+        "Puedes preparar combinaciones sin conexión. La conexión sólo se utiliza al crear la imagen vestida.",
         [
           { text: "Ahora no", style: "cancel" },
           { text: "Conectar", onPress: connectCodexExperiment },
@@ -2111,7 +2116,7 @@ export default function App() {
   const trySavedOutfit = (outfit: Outfit) => {
     const readyPieces = outfit.pieces.filter((piece) => piece.imagePath && piece.imageKind === "cutout");
     if (!readyPieces.length) {
-      Alert.alert("Prendas pendientes", "Este look todavía no tiene recortes suficientes para usar el probador.");
+      showNotice("Prendas pendientes", "Prepara las imágenes restantes antes de abrir este Look.");
       return;
     }
     setTryOnLayers(readyPieces.map((item, index) => ({ key: `${item.id}-look-${index}`, item })));
@@ -2136,6 +2141,19 @@ export default function App() {
         style={styles.app}
         onLayout={() => appRootRef.current?.measureInWindow((x, y) => { appRootWindow.current = { x, y }; })}
       >
+        {notice && (
+          <Pressable
+            style={[styles.notice, notice.tone === "error" && styles.noticeError, notice.tone === "success" && styles.noticeSuccess]}
+            onPress={() => setNotice(null)}
+            accessibilityRole="alert"
+          >
+            <View style={styles.noticeCopy}>
+              <Text style={styles.noticeTitle}>{notice.title}</Text>
+              {notice.message ? <Text style={styles.noticeMessage}>{notice.message}</Text> : null}
+            </View>
+            <Text style={styles.noticeClose}>×</Text>
+          </Pressable>
+        )}
         <View style={styles.topbar}>
           <Pressable onPress={() => setView("closet")} style={styles.brand} accessibilityLabel="Ir al armario">
             <View style={styles.brandMark}><Text style={styles.brandLetter}>OC</Text></View>
@@ -2143,7 +2161,7 @@ export default function App() {
           </Pressable>
             <View style={styles.cloudBadge}>
             <View style={cloudSession ? styles.greenDot : styles.rustDot} />
-            <Text style={[styles.cloudBadgeText, !cloudSession && styles.cloudBadgePending]}>{tryOnRendering ? "VISTIENDO AVATAR…" : processing ? experimentalProgress ? `ANALIZANDO ${experimentalProgress}%` : "ANALIZANDO…" : reconstructingId ? "CREANDO PNG…" : cloudSession ? "CUENTA PROTEGIDA" : "PREPARANDO CUENTA…"}</Text>
+            <Text style={[styles.cloudBadgeText, !cloudSession && styles.cloudBadgePending]}>{tryOnRendering ? "VISTIENDO AVATAR…" : processing ? experimentalProgress ? `ANALIZANDO ${experimentalProgress}%` : "ANALIZANDO…" : reconstructingId ? "PREPARANDO PRENDA…" : cloudSession ? "CUENTA PROTEGIDA" : "PREPARANDO CUENTA…"}</Text>
           </View>
           <Pressable style={styles.avatar} onPress={() => setProfileOpen(true)} accessibilityLabel="Privacidad y perfil">
             {avatarDisplaySource
@@ -2598,7 +2616,7 @@ export default function App() {
                 </Pressable>
               )}
               {cloudSession && <Pressable style={styles.secondaryButton} onPress={() => Promise.all([loadWardrobe(), loadOutfits(), loadAvatar()])} disabled={wardrobeLoading}><Text style={styles.secondaryButtonText}>{wardrobeLoading ? "Sincronizando…" : "Sincronizar mi cuenta"}</Text></Pressable>}
-              <Text style={styles.experimentalNote}>MODO EXPERIMENTAL · Tu sesión de ChatGPT se usa únicamente cuando analizas fotos o generas imágenes. Los tokens permanecen en este iPhone.</Text>
+              <Text style={styles.experimentalNote}>CONEXIÓN PRIVADA · Tu sesión sólo se utiliza cuando analizas fotos o generas imágenes y se protege en este iPhone.</Text>
               {!codexConnected && <Pressable style={[styles.fullButton, styles.experimentalButton, codexConnecting && styles.disabledButton]} onPress={connectCodexExperiment} disabled={codexConnecting}><Text style={styles.fullButtonText}>{codexConnecting ? "Esperando autorización…" : "Continuar con ChatGPT · prueba"}</Text></Pressable>}
               {codexConnected && <Pressable style={[styles.secondaryButton, styles.experimentalButton]} onPress={disconnectCodexExperiment}><Text style={styles.secondaryButtonText}>Cerrar sesión experimental</Text></Pressable>}
             </ScrollView>
@@ -2685,9 +2703,9 @@ export default function App() {
               <View style={styles.detailCopy}>
                 <Text style={styles.eyebrow}>{selectedItem.type.toUpperCase()}</Text>
                 <Text style={styles.detailTitle}>{selectedItem.name}</Text>
-                <Text style={styles.detailIntro}>{selectedItem.description || (selectedItem.imagePath ? `Detectada con ${selectedItem.confidence ?? 0}% de confianza. La vista actual muestra la foto de evidencia hasta generar el recorte transparente.` : "Muestra visual del armario. Esta ficha será reemplazada por la prenda extraída de tus fotos.")}</Text>
+                <Text style={styles.detailIntro}>{selectedItem.description || (selectedItem.imagePath ? "Esta es la foto original de la prenda. Prepara su imagen para usarla en tus Looks." : "Esta prenda todavía se está preparando.")}</Text>
                 {selectedItem.qaSummary?.summary && <Text style={styles.qaSummary}>{selectedItem.qaSummary.summary}</Text>}
-                {selectedItem.isBasic && <Text style={styles.qaSummary}>Básico reconocido · se conserva la evidencia y no se usa ImageGen.</Text>}
+                {selectedItem.isBasic && <Text style={styles.qaSummary}>Básico reconocido · conservamos la foto original sin gastar una generación.</Text>}
                 {selectedItem.sourceType === "internet" && selectedItem.sourceUrl && (
                   <Pressable style={styles.secondaryButton} onPress={() => Linking.openURL(selectedItem.sourceUrl!).catch(() => undefined)}>
                     <Text style={styles.secondaryButtonText}>Abrir página del producto ↗</Text>
@@ -2695,7 +2713,7 @@ export default function App() {
                 )}
                 {selectedItem.imagePath && !selectedItem.isBasic && selectedItem.sourceType !== "internet" && (
                   <Pressable style={[styles.fullButton, styles.reconstructAction, reconstructingId === selectedItem.id && styles.disabledButton]} onPress={() => chooseReconstruction(selectedItem)} disabled={reconstructingId === selectedItem.id}>
-                    <Text style={styles.fullButtonText}>{reconstructingId === selectedItem.id ? "Creando y verificando…" : selectedItem.status === "approved" ? "Regenerar PNG" : "Crear PNG transparente"}</Text>
+                    <Text style={styles.fullButtonText}>{reconstructingId === selectedItem.id ? "Creando y verificando…" : selectedItem.status === "approved" ? "Regenerar imagen" : "Crear imagen transparente"}</Text>
                   </Pressable>
                 )}
                 <Pressable style={styles.fullButton} onPress={() => addToTryOn(selectedItem)}>
@@ -2754,6 +2772,13 @@ const line = "#D8D1C4";
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: paper },
   app: { flex: 1, backgroundColor: paper },
+  notice: { position: "absolute", zIndex: 100, top: 10, left: 14, right: 14, minHeight: 58, flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 15, paddingVertical: 12, borderRadius: 16, backgroundColor: ink, shadowColor: "#000", shadowOpacity: .18, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 8 },
+  noticeSuccess: { backgroundColor: "#405641" },
+  noticeError: { backgroundColor: "#7A382D" },
+  noticeCopy: { flex: 1 },
+  noticeTitle: { color: paper, fontSize: 12, fontWeight: "800" },
+  noticeMessage: { color: "rgba(243,239,229,.82)", fontSize: 9, lineHeight: 13, marginTop: 3 },
+  noticeClose: { color: paper, fontSize: 22, fontWeight: "300" },
   topbar: { height: 58, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line },
   brand: { flexDirection: "row", alignItems: "center", gap: 8 },
   brandMark: { width: 27, height: 27, borderRadius: 14, alignItems: "center", justifyContent: "center", backgroundColor: ink },
@@ -3195,7 +3220,7 @@ function categoryForUi(category: string): Exclude<Category, "all"> {
 
 function statusLabel(status?: string) {
   if (status === "approved") return "verificada";
-  if (status === "qa") return "revisar PNG";
+  if (status === "qa") return "revisar imagen";
   if (status === "held") return "evidencia débil";
   if (status === "reconstructing") return "procesando";
   return "por reconstruir";

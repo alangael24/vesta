@@ -67,5 +67,5 @@ test("web panel and native client expose the real privacy workflow", async () =>
   assert.match(reconstructionSource, /gpt-image-2/);
   assert.match(reconstructionSource, /store: false/);
   assert.match(chromaSource, /transparentPixelRatio/);
-  assert.match(mobileSource, /Crear PNG transparente/);
+  assert.match(mobileSource, /Crear imagen transparente/);
 });

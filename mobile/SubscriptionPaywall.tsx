@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Linking,
   Modal,
   Platform,
@@ -98,7 +97,7 @@ export function SubscriptionPaywall({ visible, onClose }: Props) {
         await finishTransaction({ purchase: lastPurchase, isConsumable: false });
         setHasPremium(true);
         setStoreMessage(null);
-        Alert.alert("Outfit Club Premium activado", "Tu suscripción ya está lista en este iPhone.");
+        setStoreMessage("Outfit Club Premium ya está activo en este iPhone.");
       } catch {
         processedTransactions.current.delete(transactionKey);
         setStoreMessage("La compra se recibió, pero no pudimos finalizarla. Usa Restaurar compras para reintentar.");
@@ -145,12 +144,9 @@ export function SubscriptionPaywall({ visible, onClose }: Props) {
       await restorePurchases();
       const active = await hasActiveSubscriptions(subscriptionProductIdList);
       setHasPremium(active);
-      Alert.alert(
-        active ? "Compra restaurada" : "Sin compras activas",
-        active
-          ? "Outfit Club Premium volvió a quedar activo en este iPhone."
-          : "No encontramos una suscripción activa para este Apple ID.",
-      );
+      setStoreMessage(active
+        ? "Compra restaurada. Outfit Club Premium está activo."
+        : "No encontramos una suscripción activa para este Apple ID.");
     } catch {
       setStoreMessage("No pudimos restaurar tus compras. Revisa tu conexión e inténtalo de nuevo.");
     } finally {
