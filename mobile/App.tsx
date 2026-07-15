@@ -24,13 +24,21 @@ import {
 
 type ViewName = "closet" | "builder" | "looks";
 type Category = "all" | "tops" | "layers" | "bottoms" | "accessories";
+type ItemId = number | string;
 
 type WardrobeItem = {
-  id: number;
+  id: ItemId;
   name: string;
   category: Exclude<Category, "all">;
   type: string;
   color: string;
+  material?: string;
+  description?: string;
+  confidence?: number | null;
+  status?: string;
+  imagePath?: string | null;
+  imageKind?: "cutout" | "evidence";
+  spriteIndex?: number;
 };
 
 type Outfit = {
@@ -47,6 +55,20 @@ type CloudSession = {
   deviceId: string;
 };
 
+type CloudGarment = {
+  id: string;
+  name: string;
+  category: string;
+  type: string;
+  color: string;
+  material?: string;
+  description?: string;
+  confidence?: number | null;
+  status?: string;
+  imagePath?: string | null;
+  imageKind?: "cutout" | "evidence";
+};
+
 const cloudKeys = {
   apiUrl: "vesta.api-url",
   dispatchToken: "vesta.dispatch-token",
@@ -58,22 +80,22 @@ const wardrobeSprite = require("./assets/wardrobe-sprite.png") as ImageSourcePro
 const outfitSprite = require("./assets/outfit-sprite.png") as ImageSourcePropType;
 
 const wardrobe: WardrobeItem[] = [
-  { id: 0, name: "Camiseta negra", category: "tops", type: "Camiseta", color: "Negro" },
-  { id: 1, name: "Polo marino", category: "tops", type: "Polo", color: "Azul marino" },
-  { id: 2, name: "Camiseta cruda", category: "tops", type: "Camiseta", color: "Crudo" },
-  { id: 3, name: "Oxford celeste", category: "tops", type: "Camisa", color: "Azul claro" },
-  { id: 4, name: "Sobrecamisa cuadro", category: "layers", type: "Sobrecamisa", color: "Azul" },
-  { id: 5, name: "Polo tejido", category: "tops", type: "Polo", color: "Arena" },
-  { id: 6, name: "Jersey avena", category: "layers", type: "Jersey", color: "Avena" },
-  { id: 7, name: "Chaqueta denim", category: "layers", type: "Chaqueta", color: "Índigo" },
-  { id: 8, name: "Field jacket", category: "layers", type: "Chaqueta", color: "Oliva" },
-  { id: 9, name: "Pantalón óxido", category: "bottoms", type: "Pantalón", color: "Óxido" },
-  { id: 10, name: "Chino arena", category: "bottoms", type: "Chino", color: "Arena" },
-  { id: 11, name: "Pantalón cacao", category: "bottoms", type: "Pantalón", color: "Cacao" },
-  { id: 12, name: "Jean lavado", category: "bottoms", type: "Jeans", color: "Azul claro" },
-  { id: 13, name: "Short negro", category: "bottoms", type: "Short", color: "Negro" },
-  { id: 14, name: "Gorra camel", category: "accessories", type: "Gorra", color: "Camel" },
-  { id: 15, name: "Gafas negras", category: "accessories", type: "Gafas", color: "Negro" },
+  { id: 0, spriteIndex: 0, name: "Camiseta negra", category: "tops", type: "Camiseta", color: "Negro" },
+  { id: 1, spriteIndex: 1, name: "Polo marino", category: "tops", type: "Polo", color: "Azul marino" },
+  { id: 2, spriteIndex: 2, name: "Camiseta cruda", category: "tops", type: "Camiseta", color: "Crudo" },
+  { id: 3, spriteIndex: 3, name: "Oxford celeste", category: "tops", type: "Camisa", color: "Azul claro" },
+  { id: 4, spriteIndex: 4, name: "Sobrecamisa cuadro", category: "layers", type: "Sobrecamisa", color: "Azul" },
+  { id: 5, spriteIndex: 5, name: "Polo tejido", category: "tops", type: "Polo", color: "Arena" },
+  { id: 6, spriteIndex: 6, name: "Jersey avena", category: "layers", type: "Jersey", color: "Avena" },
+  { id: 7, spriteIndex: 7, name: "Chaqueta denim", category: "layers", type: "Chaqueta", color: "Índigo" },
+  { id: 8, spriteIndex: 8, name: "Field jacket", category: "layers", type: "Chaqueta", color: "Oliva" },
+  { id: 9, spriteIndex: 9, name: "Pantalón óxido", category: "bottoms", type: "Pantalón", color: "Óxido" },
+  { id: 10, spriteIndex: 10, name: "Chino arena", category: "bottoms", type: "Chino", color: "Arena" },
+  { id: 11, spriteIndex: 11, name: "Pantalón cacao", category: "bottoms", type: "Pantalón", color: "Cacao" },
+  { id: 12, spriteIndex: 12, name: "Jean lavado", category: "bottoms", type: "Jeans", color: "Azul claro" },
+  { id: 13, spriteIndex: 13, name: "Short negro", category: "bottoms", type: "Short", color: "Negro" },
+  { id: 14, spriteIndex: 14, name: "Gorra camel", category: "accessories", type: "Gorra", color: "Camel" },
+  { id: 15, spriteIndex: 15, name: "Gafas negras", category: "accessories", type: "Gafas", color: "Negro" },
 ];
 
 const outfits: Outfit[] = [
@@ -134,6 +156,18 @@ function Sprite({
   );
 }
 
+function GarmentVisual({ item, session }: { item: WardrobeItem; session: CloudSession | null }) {
+  if (item.imagePath && session) {
+    return (
+      <View style={[styles.spriteFrame, { aspectRatio: 1 }]}>
+        <Image source={authorizedImageSource(session, item.imagePath)} resizeMode={item.imageKind === "cutout" ? "contain" : "cover"} style={styles.cloudGarmentImage} />
+        {item.imageKind === "evidence" && <View style={styles.evidenceBadge}><Text style={styles.evidenceBadgeText}>EVIDENCIA</Text></View>}
+      </View>
+    );
+  }
+  return <Sprite source={wardrobeSprite} index={item.spriteIndex ?? Number(item.id)} columns={4} rows={4} />;
+}
+
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -153,12 +187,17 @@ export default function App() {
   const [cloudSession, setCloudSession] = useState<CloudSession | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [builderItems, setBuilderItems] = useState([2, 9]);
+  const [processing, setProcessing] = useState(false);
+  const [cloudWardrobe, setCloudWardrobe] = useState<WardrobeItem[]>([]);
+  const [wardrobeLoading, setWardrobeLoading] = useState(false);
+  const [builderItems, setBuilderItems] = useState<ItemId[]>([2, 9]);
   const [occasion, setOccasion] = useState("Diario");
 
+  const activeWardrobe = cloudWardrobe.length ? cloudWardrobe : wardrobe;
+
   const visibleItems = useMemo(
-    () => wardrobe.filter((item) => filter === "all" || item.category === filter),
-    [filter],
+    () => activeWardrobe.filter((item) => filter === "all" || item.category === filter),
+    [activeWardrobe, filter],
   );
   const photoBytes = useMemo(
     () => photos.reduce((total, photo) => total + (photo.fileSize ?? 0), 0),
@@ -235,6 +274,30 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!cloudSession) {
+      setCloudWardrobe([]);
+      return;
+    }
+    loadWardrobe(cloudSession).catch(() => undefined);
+  }, [cloudSession?.apiUrl, cloudSession?.deviceToken]);
+
+  async function loadWardrobe(session = cloudSession) {
+    if (!session) return;
+    setWardrobeLoading(true);
+    try {
+      const response = await cloudFetch(session, "/api/v1/wardrobe", { method: "GET" });
+      if (!response.ok) return;
+      const result = await response.json() as { garments: CloudGarment[] };
+      setCloudWardrobe(result.garments.map((item) => ({
+        ...item,
+        category: categoryForUi(item.category),
+      })));
+    } finally {
+      setWardrobeLoading(false);
+    }
+  }
+
   const pickPhotos = async () => {
     setPicking(true);
     try {
@@ -307,7 +370,7 @@ export default function App() {
         body: JSON.stringify({ photos: manifest, originalsPolicy: "retain_private" }),
       });
       if (!batchResponse.ok) throw new Error("batch_failed");
-      const batch = await batchResponse.json() as { photos: Array<{ uploadPath: string }> };
+      const batch = await batchResponse.json() as { batchId: string; photos: Array<{ uploadPath: string }> };
 
       for (let index = 0; index < photos.length; index += 1) {
         const fileResponse = await fetch(photos[index].uri);
@@ -323,7 +386,17 @@ export default function App() {
 
       setBatchReady(false);
       setImportOpen(false);
-      Alert.alert("Guardado en tu nube", `${photos.length} fotos privadas están listas para el inventario de prendas.`);
+      const uploadedCount = photos.length;
+      setPhotos([]);
+      Alert.alert(
+        "Fotos guardadas en tu nube",
+        `${uploadedCount} fotos ya están privadas en Vesta. Para detectar prendas se enviarán copias reducidas a la API de OpenAI. No se usan para entrenar por defecto; sus registros de seguridad pueden conservarse hasta 30 días. ¿Qué prefieres?`,
+        [
+          { text: "Analizar después", style: "cancel" },
+          { text: "Económico", onPress: () => startProcessing(batch.batchId, "economy") },
+          { text: "Máxima precisión", onPress: () => startProcessing(batch.batchId, "quality") },
+        ],
+      );
     } catch {
       Alert.alert("La subida se interrumpió", "Tus fotos locales siguen intactas. Puedes intentarlo otra vez.");
     } finally {
@@ -331,7 +404,31 @@ export default function App() {
     }
   };
 
-  const toggleBuilderItem = (id: number) => {
+  const startProcessing = async (batchId: string, mode: "economy" | "quality") => {
+    if (!cloudSession || processing) return;
+    setProcessing(true);
+    try {
+      const response = await cloudFetch(cloudSession, `/api/v1/batches/${batchId}/process`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode, consent: true, acknowledgesOpenAIRetention: true }),
+      });
+      const result = await response.json() as { error?: string; garmentCount?: number };
+      if (response.status === 503 && result.error === "processing_not_configured") {
+        Alert.alert("Fotos seguras; análisis pendiente", "El motor privado de IA todavía necesita su clave de procesamiento. Tus fotos quedaron guardadas y no se enviaron a OpenAI.");
+        return;
+      }
+      if (!response.ok) throw new Error(result.error || "processing_failed");
+      await loadWardrobe(cloudSession);
+      Alert.alert("Inventario listo para revisar", `Vesta detectó ${result.garmentCount ?? 0} candidatos de prendas. Las dudosas quedaron marcadas y los posibles duplicados se revisarán antes de aprobarlos.`);
+    } catch {
+      Alert.alert("El análisis no terminó", "Tus originales siguen seguros en la nube. Podremos reintentar el inventario sin volver a subirlos.");
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const toggleBuilderItem = (id: ItemId) => {
     setBuilderItems((current) => {
       if (current.includes(id)) return current.filter((value) => value !== id);
       if (current.length >= 3) return [...current.slice(1), id];
@@ -350,7 +447,7 @@ export default function App() {
           </Pressable>
           <View style={styles.cloudBadge}>
             <View style={cloudSession ? styles.greenDot : styles.rustDot} />
-            <Text style={[styles.cloudBadgeText, !cloudSession && styles.cloudBadgePending]}>{cloudSession ? "NUBE CONECTADA" : "NUBE POR EMPAREJAR"}</Text>
+            <Text style={[styles.cloudBadgeText, !cloudSession && styles.cloudBadgePending]}>{processing ? "ANALIZANDO…" : cloudSession ? "NUBE CONECTADA" : "NUBE POR EMPAREJAR"}</Text>
           </View>
           <Pressable style={styles.avatar} onPress={() => setProfileOpen(true)} accessibilityLabel="Privacidad y perfil">
             <Text style={styles.avatarText}>AL</Text>
@@ -368,8 +465,8 @@ export default function App() {
               <View>
                 <View style={styles.headingRow}>
                   <View>
-                    <Text style={styles.eyebrow}>COLECCIÓN DE MUESTRA</Text>
-                    <Text style={styles.pageTitle}>Armario <Text style={styles.count}>16</Text></Text>
+                    <Text style={styles.eyebrow}>{cloudWardrobe.length ? "TU ARMARIO PRIVADO" : "COLECCIÓN DE MUESTRA"}</Text>
+                    <Text style={styles.pageTitle}>Armario <Text style={styles.count}>{activeWardrobe.length}</Text></Text>
                   </View>
                   <Pressable style={styles.importButton} onPress={() => setImportOpen(true)}>
                     <Text style={styles.importButtonText}>＋ Importar</Text>
@@ -396,10 +493,10 @@ export default function App() {
             }
             renderItem={({ item }) => (
               <Pressable style={styles.garmentCard} onPress={() => setSelectedItem(item)}>
-                <Sprite source={wardrobeSprite} index={item.id} columns={4} rows={4} />
+                <GarmentVisual item={item} session={cloudSession} />
                 <View style={styles.cardCopy}>
                   <Text style={styles.cardTitle}>{item.name}</Text>
-                  <Text style={styles.cardMeta}>{item.type} · {item.color}</Text>
+                  <Text style={styles.cardMeta}>{item.type} · {item.color}{item.status === "held" ? " · revisar" : ""}</Text>
                 </View>
                 {builderItems.includes(item.id) && <View style={styles.selectedDot}><Text style={styles.selectedDotText}>✓</Text></View>}
               </Pressable>
@@ -417,10 +514,10 @@ export default function App() {
               <View style={styles.stepHeading}><Text style={styles.stepNumber}>01</Text><Text style={styles.stepTitle}>Prendas base</Text></View>
               <View style={styles.selectedStrip}>
                 {[0, 1, 2].map((slot) => {
-                  const item = wardrobe.find((entry) => entry.id === builderItems[slot]);
+                  const item = activeWardrobe.find((entry) => entry.id === builderItems[slot]);
                   return item ? (
                     <Pressable key={slot} style={styles.selectedPiece} onPress={() => toggleBuilderItem(item.id)}>
-                      <Sprite source={wardrobeSprite} index={item.id} columns={4} rows={4} />
+                      <GarmentVisual item={item} session={cloudSession} />
                       <View style={styles.removeBubble}><Text style={styles.removeText}>×</Text></View>
                     </Pressable>
                   ) : (
@@ -543,7 +640,8 @@ export default function App() {
               <View style={styles.architectureRow}><Text style={styles.architectureLabel}>ACCESO</Text><Text style={styles.architectureValue}>Solo Alan</Text></View>
               <View style={styles.architectureRow}><Text style={styles.architectureLabel}>ESTADO</Text><Text style={cloudSession ? styles.architectureValue : styles.architecturePending}>{cloudSession ? "Conectada" : pairing ? "Emparejando…" : "Por conectar"}</Text></View>
             </View>
-            <Text style={styles.profileFootnote}>{cloudSession ? "Las credenciales de este dispositivo están guardadas en el llavero seguro del sistema." : "Abre la web privada de Vesta en este teléfono y toca “Emparejar app nativa”. El enlace dura diez minutos."}</Text>
+            <Text style={styles.profileFootnote}>{cloudSession ? `${cloudWardrobe.length ? `${cloudWardrobe.length} prendas reales sincronizadas. ` : ""}Las credenciales de este dispositivo están guardadas en el llavero seguro del sistema.` : "Abre la web privada de Vesta en este teléfono y toca “Emparejar app nativa”. El enlace dura diez minutos."}</Text>
+            {cloudSession && <Pressable style={styles.secondaryButton} onPress={() => loadWardrobe()} disabled={wardrobeLoading}><Text style={styles.secondaryButtonText}>{wardrobeLoading ? "Sincronizando…" : "Sincronizar armario"}</Text></Pressable>}
             {!cloudSession && <Pressable style={styles.fullButton} onPress={pairFromClipboard} disabled={pairing}><Text style={styles.fullButtonText}>{pairing ? "Emparejando…" : "Pegar enlace de emparejamiento"}</Text></Pressable>}
             {cloudSession && <Pressable onPress={disconnectCloud}><Text style={styles.deleteText}>Desconectar este teléfono</Text></Pressable>}
           </View>
@@ -554,12 +652,12 @@ export default function App() {
         <View style={styles.detailBackdrop}>
           <View style={styles.detailSheet}>
             <Pressable style={styles.closeButton} onPress={() => setSelectedItem(null)}><Text style={styles.closeText}>×</Text></Pressable>
-            {selectedItem && <Sprite source={wardrobeSprite} index={selectedItem.id} columns={4} rows={4} />}
+            {selectedItem && <GarmentVisual item={selectedItem} session={cloudSession} />}
             {selectedItem && (
               <View style={styles.detailCopy}>
                 <Text style={styles.eyebrow}>{selectedItem.type.toUpperCase()}</Text>
                 <Text style={styles.detailTitle}>{selectedItem.name}</Text>
-                <Text style={styles.detailIntro}>Muestra visual del armario. Esta ficha será reemplazada por la prenda extraída de tus fotos.</Text>
+                <Text style={styles.detailIntro}>{selectedItem.description || (selectedItem.imagePath ? `Detectada con ${selectedItem.confidence ?? 0}% de confianza. La vista actual muestra la foto de evidencia hasta generar el recorte transparente.` : "Muestra visual del armario. Esta ficha será reemplazada por la prenda extraída de tus fotos.")}</Text>
                 <Pressable style={styles.fullButton} onPress={() => toggleBuilderItem(selectedItem.id)}>
                   <Text style={styles.fullButtonText}>{builderItems.includes(selectedItem.id) ? "✓ En el creador" : "＋ Usar en un look"}</Text>
                 </Pressable>
@@ -629,6 +727,9 @@ const styles = StyleSheet.create({
   cardRow: { gap: 9 },
   garmentCard: { flex: 1, position: "relative", marginBottom: 13, backgroundColor: "#EAE5DA", borderWidth: StyleSheet.hairlineWidth, borderColor: line },
   spriteFrame: { width: "100%", overflow: "hidden", backgroundColor: "#E8E2D6" },
+  cloudGarmentImage: { width: "100%", height: "100%" },
+  evidenceBadge: { position: "absolute", left: 6, bottom: 6, paddingHorizontal: 6, paddingVertical: 4, backgroundColor: "rgba(33,31,27,.78)" },
+  evidenceBadgeText: { color: paper, fontSize: 6, fontWeight: "800", letterSpacing: 0.7 },
   cardCopy: { padding: 10, backgroundColor: "#F8F5ED" },
   cardTitle: { color: ink, fontSize: 10, fontWeight: "700" },
   cardMeta: { color: muted, fontSize: 8, marginTop: 3 },
@@ -689,6 +790,8 @@ const styles = StyleSheet.create({
   photoSummaryTitle: { color: ink, fontSize: 9, fontWeight: "700" },
   photoSummaryMeta: { color: muted, fontSize: 8 },
   fullButton: { width: "100%", alignItems: "center", backgroundColor: ink, paddingVertical: 15 },
+  secondaryButton: { width: "100%", alignItems: "center", marginTop: 14, borderWidth: 1, borderColor: ink, paddingVertical: 13 },
+  secondaryButtonText: { color: ink, fontSize: 9, fontWeight: "800" },
   disabledButton: { opacity: 0.6 },
   fullButtonText: { color: paper, fontSize: 10, fontWeight: "800" },
   deleteText: { color: "#8B4733", textAlign: "center", fontSize: 9, paddingTop: 15 },
@@ -712,6 +815,23 @@ function cloudFetch(session: CloudSession, path: string, init: RequestInit) {
   headers.set("OAI-Sites-Authorization", `Bearer ${session.dispatchToken}`);
   headers.set("x-vesta-device-token", session.deviceToken);
   return fetch(`${session.apiUrl}${path}`, { ...init, headers });
+}
+
+function authorizedImageSource(session: CloudSession, path: string) {
+  return {
+    uri: `${session.apiUrl}${path}`,
+    headers: {
+      "OAI-Sites-Authorization": `Bearer ${session.dispatchToken}`,
+      "x-vesta-device-token": session.deviceToken,
+    },
+  };
+}
+
+function categoryForUi(category: string): Exclude<Category, "all"> {
+  if (category === "tops" || category === "layers" || category === "bottoms" || category === "accessories") return category;
+  if (category === "footwear") return "accessories";
+  if (category === "one_piece") return "layers";
+  return "accessories";
 }
 
 function mimeTypeFor(photo: ImagePicker.ImagePickerAsset) {

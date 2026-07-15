@@ -16,6 +16,11 @@ test("build contains the deployable Worker, private bindings, and migrations", a
   for (const table of ["users", "devices", "import_batches", "source_photos", "processing_jobs", "garments", "outfits"]) {
     assert.ok(migration.includes(`CREATE TABLE \`${table}\``), `missing table ${table}`);
   }
+
+  const processingMigration = await readFile(new URL("dist/.openai/drizzle/0001_strong_franklin_storm.sql", root), "utf8");
+  for (const column of ["processing_mode", "processing_approved_at", "normalized_key", "input_tokens", "output_tokens"]) {
+    assert.ok(processingMigration.includes(column), `missing processing column ${column}`);
+  }
 });
 
 test("web panel and native client expose the real privacy workflow", async () => {
@@ -35,4 +40,15 @@ test("web panel and native client expose the real privacy workflow", async () =>
   assert.match(mobileSource, /SecureStore\.setItemAsync/);
   assert.match(mobileSource, /Subir a mi nube privada/i);
   assert.match(mobileSource, /OAI-Sites-Authorization/);
+  assert.match(mobileSource, /acknowledgesOpenAIRetention: true/);
+  assert.match(mobileSource, /api\/v1\/wardrobe/);
+
+  const [processorSource, uploadSource] = await Promise.all([
+    readFile(new URL("lib/inventory.ts", root), "utf8"),
+    readFile(new URL("app/api/v1/batches/[batchId]/photos/[photoId]/route.ts", root), "utf8"),
+  ]);
+  assert.match(processorSource, /store: false/);
+  assert.match(processorSource, /gpt-4o-mini/);
+  assert.match(processorSource, /gpt-5\.6/);
+  assert.match(uploadSource, /status: "waiting_review"/);
 });

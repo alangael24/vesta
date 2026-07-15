@@ -54,10 +54,11 @@ export async function PUT(request: Request, context: RouteContext) {
         ownerId: identity.ownerId,
         batchId,
         kind: "inventory",
-        status: "queued",
+        status: "waiting_review",
         progress: 0,
         attempts: 0,
         createdAt: now,
+        updatedAt: now,
       }).onConflictDoNothing(),
     ]);
   }
