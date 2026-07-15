@@ -535,6 +535,7 @@ h1, h2, p { margin-top: 0; }
 .cloud-facts span { color: var(--muted); }
 .cloud-facts strong { color: #53644f; }
 .pairing-link { display: block; margin-top: 15px; color: var(--ink); font-size: 10px; font-weight: 650; text-decoration: underline; text-underline-offset: 3px; }
+.pairing-actions { display: grid; gap: 4px; }
 .pairing-note { margin: 14px 4px 0 !important; font-size: 9px !important; }
 
 .toast {

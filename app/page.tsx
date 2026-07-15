@@ -225,11 +225,21 @@ export default function Home() {
       if (!response.ok) throw new Error("pairing_failed");
       const result = await response.json() as { pairingUrl: string };
       setPairingUrl(result.pairingUrl);
-      window.location.href = result.pairingUrl;
+      setToast("Enlace seguro creado · dura 10 minutos");
     } catch {
       setToast("No se pudo crear el enlace · vuelve a iniciar sesión");
     } finally {
       setPairingLoading(false);
+    }
+  };
+
+  const copyPairingLink = async () => {
+    if (!pairingUrl) return;
+    try {
+      await navigator.clipboard.writeText(pairingUrl);
+      setToast("Enlace copiado · pégalo dentro de Vesta");
+    } catch {
+      setToast("No se pudo copiar automáticamente");
     }
   };
 
@@ -489,7 +499,12 @@ export default function Home() {
             <button className="primary-button" disabled={pairingLoading} onClick={startPairing}>
               {pairingLoading ? "Creando enlace seguro…" : "Emparejar app nativa"}
             </button>
-            {pairingUrl && <a className="pairing-link" href={pairingUrl}>Abrir nuevamente en Vesta →</a>}
+            {pairingUrl && (
+              <div className="pairing-actions">
+                <a className="pairing-link" href={pairingUrl}>Abrir app instalada →</a>
+                <button className="text-button center" onClick={copyPairingLink}>Copiar para Expo Go</button>
+              </div>
+            )}
             <p className="pairing-note">Hazlo desde este teléfono después de instalar la app. El enlace caduca en 10 minutos y solo puede usarse una vez.</p>
           </section>
         </div>

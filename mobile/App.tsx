@@ -1,4 +1,5 @@
 import { StatusBar } from "expo-status-bar";
+import * as Clipboard from "expo-clipboard";
 import * as Device from "expo-device";
 import * as ImagePicker from "expo-image-picker";
 import * as SecureStore from "expo-secure-store";
@@ -270,6 +271,15 @@ export default function App() {
     setCloudSession(null);
   };
 
+  const pairFromClipboard = async () => {
+    const value = (await Clipboard.getStringAsync()).trim();
+    if (!value.startsWith("vesta://pair?")) {
+      Alert.alert("No hay un enlace de Vesta", "Copia el enlace desde la web privada y vuelve a intentarlo.");
+      return;
+    }
+    await redeemPairingUrl(value);
+  };
+
   const uploadBatch = async () => {
     if (!cloudSession) {
       setImportOpen(false);
@@ -534,6 +544,7 @@ export default function App() {
               <View style={styles.architectureRow}><Text style={styles.architectureLabel}>ESTADO</Text><Text style={cloudSession ? styles.architectureValue : styles.architecturePending}>{cloudSession ? "Conectada" : pairing ? "Emparejando…" : "Por conectar"}</Text></View>
             </View>
             <Text style={styles.profileFootnote}>{cloudSession ? "Las credenciales de este dispositivo están guardadas en el llavero seguro del sistema." : "Abre la web privada de Vesta en este teléfono y toca “Emparejar app nativa”. El enlace dura diez minutos."}</Text>
+            {!cloudSession && <Pressable style={styles.fullButton} onPress={pairFromClipboard} disabled={pairing}><Text style={styles.fullButtonText}>{pairing ? "Emparejando…" : "Pegar enlace de emparejamiento"}</Text></Pressable>}
             {cloudSession && <Pressable onPress={disconnectCloud}><Text style={styles.deleteText}>Desconectar este teléfono</Text></Pressable>}
           </View>
         </View>
