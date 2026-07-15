@@ -180,7 +180,8 @@ export async function generateExperimentalGarmentImage(
 ) {
   const evidence = garment.evidence.find((item) => item.photo_id === photo.id) ?? garment.evidence[0];
   const image = await prepareGarmentEvidence(photo.asset, evidence?.bbox);
-  const prompt = `Create a clean ecommerce catalog image of only the target garment visibly supported by the reference: ${garment.name}; type: ${garment.type}; color: ${garment.color || "unknown"}. Remove the person, body, face, hands, phone, room, background, interface, and every other object. Reconstruct only this physical garment faithfully, front view, centered, white background, no mannequin, no body, and no hanger. Preserve garment-attached logos, graphics, text, patterns, seams, pockets, and branding only when they are clearly visible on the target garment; never invent, move, replace, or alter them. Preserve only details visibly supported by the reference.`;
+  const chroma = chromaForGarment(garment.color);
+  const prompt = `Create a clean ecommerce catalog image of only the target garment visibly supported by the reference: ${garment.name}; type: ${garment.type}; color: ${garment.color || "unknown"}. Remove the person, body, face, hands, phone, room, original background, interface, and every other object. Reconstruct only this physical garment faithfully, front view, centered, no mannequin, no body, and no hanger. BACKGROUND: perfectly flat uniform ${chroma.name} chroma background, exact RGB ${chroma.rgb.join(",")}, edge to edge, with no shadow, gradient, texture, floor, or backdrop seam. Keep that background color completely separate from the garment. Preserve garment-attached logos, graphics, text, patterns, seams, pockets, and branding only when they are clearly visible on the target garment; never invent, move, replace, or alter them. Preserve only details visibly supported by the reference.`;
   const response = await codexImageEdit({
     images: [{ image_url: `data:image/jpeg;base64,${image}` }],
     prompt,
@@ -194,6 +195,17 @@ export async function generateExperimentalGarmentImage(
   const result = payload.data?.[0]?.b64_json;
   if (!result) throw new Error("image_edit_empty");
   return result;
+}
+
+function chromaForGarment(color: string) {
+  const normalized = color.toLowerCase();
+  if (/verde|green|oliva|olive|lima|lime/u.test(normalized)) {
+    return { name: "electric magenta", rgb: [255, 0, 255] as const };
+  }
+  if (/magenta|fucsia|pink|rosa|morado|purple|violet/u.test(normalized)) {
+    return { name: "electric cyan", rgb: [0, 255, 255] as const };
+  }
+  return { name: "electric green", rgb: [0, 255, 0] as const };
 }
 
 async function prepareGarmentEvidence(

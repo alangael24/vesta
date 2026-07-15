@@ -655,7 +655,7 @@ export default function App() {
     if (codexConnected && item.evidencePath) {
       Alert.alert(
         "Crear imagen de catálogo",
-        "GPT Image 2 aislará esta prenda a partir de tu foto y la colocará sobre fondo blanco. La foto original seguirá guardada como evidencia privada.",
+        "GPT Image 2 aislará esta prenda a partir de tu foto. Vesta quitará el fondo para integrarla exactamente con el color del armario. La foto original seguirá guardada como evidencia privada.",
         [
           { text: "Ahora no", style: "cancel" },
           { text: "Crear", onPress: () => startExperimentalReconstruction(item) },
@@ -713,7 +713,7 @@ export default function App() {
       const items = await loadWardrobe(cloudSession);
       const updated = items?.find((candidate) => candidate.id === item.id);
       if (updated) setSelectedItem(updated);
-      Alert.alert("Imagen lista", "Vesta creó la prenda aislada sobre fondo blanco. Compárala con la evidencia antes de aprobarla.");
+      Alert.alert("Imagen lista", "Vesta creó un recorte transparente que se integra con el fondo del armario. Compáralo con la evidencia antes de aprobarlo.");
     } catch (error) {
       const detail = error instanceof Error ? error.message : "unknown";
       Alert.alert("No se creó la imagen", `La evidencia original sigue intacta. Detalle técnico: ${detail}`);
@@ -1079,12 +1079,12 @@ const styles = StyleSheet.create({
   emptyCollectionTitle: { color: ink, fontSize: 17, fontFamily: Platform.select({ ios: "Georgia", android: "serif" }) },
   emptyCollectionCopy: { color: muted, maxWidth: 250, marginTop: 8, textAlign: "center", fontSize: 9, lineHeight: 14 },
   cardRow: { gap: 9 },
-  garmentCard: { flex: 1, position: "relative", marginBottom: 13, backgroundColor: "#EAE5DA", borderWidth: StyleSheet.hairlineWidth, borderColor: line },
-  spriteFrame: { width: "100%", overflow: "hidden", backgroundColor: "#E8E2D6" },
+  garmentCard: { flex: 1, position: "relative", marginBottom: 13, backgroundColor: paper, borderWidth: StyleSheet.hairlineWidth, borderColor: "transparent" },
+  spriteFrame: { width: "100%", overflow: "hidden", backgroundColor: paper },
   cloudGarmentImage: { width: "100%", height: "100%" },
   evidenceBadge: { position: "absolute", left: 6, bottom: 6, paddingHorizontal: 6, paddingVertical: 4, backgroundColor: "rgba(33,31,27,.78)" },
   evidenceBadgeText: { color: paper, fontSize: 6, fontWeight: "800", letterSpacing: 0.7 },
-  cardCopy: { padding: 10, backgroundColor: "#F8F5ED" },
+  cardCopy: { padding: 10, backgroundColor: paper },
   cardTitle: { color: ink, fontSize: 10, fontWeight: "700" },
   cardMeta: { color: muted, fontSize: 8, marginTop: 3 },
   selectedDot: { position: "absolute", right: 7, top: 7, width: 20, height: 20, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: ink },

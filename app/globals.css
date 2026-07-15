@@ -4,7 +4,7 @@
   --ink: #171813;
   --muted: #77766e;
   --paper: #f3efe5;
-  --card: #faf8f2;
+  --card: #f3efe5;
   --line: #dcd6c9;
   --rust: #a34f31;
   --olive: #5d6547;
@@ -216,7 +216,7 @@ h1, h2, p { margin-top: 0; }
 }
 
 .garment-card .garment-art {
-  border: 1px solid color-mix(in srgb, var(--line) 65%, transparent);
+  border: 1px solid transparent;
   transition: transform .28s ease, filter .28s ease;
 }
 .garment-card:active .garment-art { transform: scale(.985); filter: brightness(.98); }

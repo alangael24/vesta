@@ -2,6 +2,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { garmentEvidence, garments, sourcePhotos } from "@/db/schema";
 import { ChromaError, ChromaStats, removeChroma } from "@/lib/chroma";
+import { chromaForGarment, GarmentChroma } from "@/lib/garment-background";
 import { arrayBufferToBase64, base64ToBytes, extractOutputText, getOpenAIKey, OpenAIResponse } from "@/lib/openai";
 import { garmentCutoutKey, garmentReconstructionKey, getMediaBucket, normalizedPhotoKey } from "@/lib/storage";
 
@@ -82,7 +83,7 @@ export async function reconstructAndVerify(ownerId: string, garmentId: string, m
   if (!evidence.length) throw new ReconstructionError("garment_evidence_missing", "No evidence is available for this garment.");
 
   const references = await loadEvidence(ownerId, evidence);
-  const chroma = chromaFor(garment.color || "");
+  const chroma = chromaForGarment(garment.color || "");
   const form = new FormData();
   form.set("model", "gpt-image-2");
   form.set("prompt", reconstructionPrompt(garment, evidence, chroma));
@@ -172,7 +173,7 @@ async function loadEvidence(ownerId: string, evidence: Evidence[]) {
   return images;
 }
 
-function reconstructionPrompt(garment: typeof garments.$inferSelect, evidence: Evidence[], chroma: Chroma) {
+function reconstructionPrompt(garment: typeof garments.$inferSelect, evidence: Evidence[], chroma: GarmentChroma) {
   const boxes = evidence.map((item, index) => `Image ${index + 1}: target box x=${item.bboxX}, y=${item.bboxY}, width=${item.bboxWidth}, height=${item.bboxHeight} on a 0-1000 coordinate grid.`).join("\n");
   return `GOAL: Create one evidence-bound ecommerce reconstruction of the exact garment identified below, using only the supplied photos as visual evidence.
 TARGET: ${garment.name}; category ${garment.category}; type ${garment.type}; observed color ${garment.color || "uncertain"}; observed material ${garment.material || "uncertain"}.
@@ -212,15 +213,6 @@ async function runVisualQa(apiKey: string, garment: typeof garments.$inferSelect
   const output = extractOutputText(payload);
   if (!output) throw new ReconstructionError("qa_empty_output", "The QA model returned no result.");
   return JSON.parse(output) as VisualQa;
-}
-
-type Chroma = { name: string; rgb: [number, number, number] };
-
-function chromaFor(color: string): Chroma {
-  const normalized = color.toLowerCase();
-  if (/verde|green|oliva|olive|lima|lime/u.test(normalized)) return { name: "electric magenta", rgb: [255, 0, 255] };
-  if (/magenta|fucsia|pink|rosa|morado|purple|violet/u.test(normalized)) return { name: "electric cyan", rgb: [0, 255, 255] };
-  return { name: "electric green", rgb: [0, 255, 0] };
 }
 
 export class ReconstructionError extends Error {

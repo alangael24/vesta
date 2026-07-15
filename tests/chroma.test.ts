@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { decode, encode } from "fast-png";
 import { removeChroma } from "../lib/chroma.ts";
+import { chromaForGarment } from "../lib/garment-background.ts";
 
 test("chroma removal creates a transparent RGBA PNG and preserves the garment", () => {
   const width = 10;
@@ -23,4 +24,11 @@ test("chroma removal creates a transparent RGBA PNG and preserves the garment", 
   assert.equal(result.stats.foregroundPixelRatio, 25);
   assert.equal(decoded.data[3], 255, "foreground pixel remains opaque");
   assert.equal(decoded.data[(width * height - 1) * 4 + 3], 0, "chroma background becomes transparent");
+});
+
+test("chroma color avoids the observed garment color", () => {
+  assert.deepEqual(chromaForGarment("verde oliva").rgb, [255, 0, 255]);
+  assert.deepEqual(chromaForGarment("rosa fuerte").rgb, [0, 255, 255]);
+  assert.deepEqual(chromaForGarment("negro").rgb, [0, 255, 0]);
+  assert.deepEqual(chromaForGarment("blanco").rgb, [0, 255, 0]);
 });
