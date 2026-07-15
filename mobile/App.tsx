@@ -1278,13 +1278,12 @@ export default function App() {
           { text: "Después", style: "cancel" },
           { text: "Crear avatar", onPress: () => setAvatarOpen(true) },
         ]);
-      } else if (!codexConnected) {
-        Alert.alert("Prenda lista para probar", "La importamos y la añadimos al outfit. Conecta ChatGPT para generar cómo se te ve.", [
-          { text: "Después", style: "cancel" },
-          { text: "Conectar", onPress: connectCodexExperiment },
-        ]);
       } else {
-        renderRealTryOn(nextLayers, nextLayers, "low").catch(() => undefined);
+        Alert.alert(
+          "Prenda añadida al outfit",
+          "Ahora combínala con las prendas de tu armario. Cuando el outfit esté completo, toca “Probar outfit” para generar una sola imagen.",
+          [{ text: "Seguir armando" }],
+        );
       }
     } catch (error) {
       const code = error instanceof Error ? error.message : "product_import_failed";
@@ -2020,7 +2019,7 @@ export default function App() {
               <View style={styles.webTryOnIcon}><Text style={styles.webTryOnIconText}>↗</Text></View>
               <View style={styles.webTryOnCopy}>
                 <Text style={styles.webTryOnEyebrow}>¿VISTE ALGO EN INTERNET?</Text>
-                <Text style={styles.webTryOnTitle}>Pega el link y pruébatelo</Text>
+                <Text style={styles.webTryOnTitle}>Pega el link y combínalo</Text>
               </View>
               <Text style={styles.webTryOnArrow}>›</Text>
             </Pressable>
@@ -2301,7 +2300,7 @@ export default function App() {
               onPress={() => importProductFromUrl().catch(() => undefined)}
               disabled={!productUrl.trim() || productImporting}
             >
-              {productImporting ? <ActivityIndicator color={paper} /> : <Text style={styles.fullButtonText}>✦ Importar y probar ahora</Text>}
+              {productImporting ? <ActivityIndicator color={paper} /> : <Text style={styles.fullButtonText}>＋ Importar al outfit</Text>}
             </Pressable>
             <Text style={styles.productImportPrivacy}>Solo se lee la página pública que pegaste. La referencia importada queda protegida dentro de tu cuenta y también puede combinarse en Looks.</Text>
           </View>
