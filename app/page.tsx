@@ -23,11 +23,6 @@ type Outfit = {
   pieces: number[];
 };
 
-type InstallPrompt = Event & {
-  prompt: () => Promise<void>;
-  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
-};
-
 type LocalPhoto = {
   id: string;
   name: string;
@@ -128,20 +123,15 @@ export default function Home() {
   const [occasion, setOccasion] = useState("Diario");
   const [favorites, setFavorites] = useState<number[]>(loadFavorites);
   const [showImport, setShowImport] = useState(false);
-  const [showInstall, setShowInstall] = useState(false);
-  const [installPrompt, setInstallPrompt] = useState<InstallPrompt | null>(null);
+  const [showCloud, setShowCloud] = useState(false);
+  const [pairingLoading, setPairingLoading] = useState(false);
+  const [pairingUrl, setPairingUrl] = useState("");
   const [selectedPhotos, setSelectedPhotos] = useState<LocalPhoto[]>([]);
   const [batchPrepared, setBatchPrepared] = useState(false);
   const [toast, setToast] = useState("");
 
   useEffect(() => {
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
-    const handler = (event: Event) => {
-      event.preventDefault();
-      setInstallPrompt(event as InstallPrompt);
-    };
-    window.addEventListener("beforeinstallprompt", handler);
-    return () => window.removeEventListener("beforeinstallprompt", handler);
   }, []);
 
   useEffect(() => {
@@ -155,9 +145,9 @@ export default function Home() {
   }, [toast]);
 
   useEffect(() => {
-    document.body.classList.toggle("sheet-active", Boolean(selectedItem || selectedOutfit || showImport || showInstall));
+    document.body.classList.toggle("sheet-active", Boolean(selectedItem || selectedOutfit || showImport || showCloud));
     return () => document.body.classList.remove("sheet-active");
-  }, [selectedItem, selectedOutfit, showImport, showInstall]);
+  }, [selectedItem, selectedOutfit, showImport, showCloud]);
 
   useEffect(() => {
     return () => selectedPhotos.forEach((photo) => URL.revokeObjectURL(photo.url));
@@ -228,11 +218,19 @@ export default function Home() {
     setToast("Estos looks son una muestra del producto");
   };
 
-  const installApp = async () => {
-    if (!installPrompt) return setShowInstall(true);
-    await installPrompt.prompt();
-    await installPrompt.userChoice;
-    setInstallPrompt(null);
+  const startPairing = async () => {
+    setPairingLoading(true);
+    try {
+      const response = await fetch("/api/v1/pairing", { method: "POST" });
+      if (!response.ok) throw new Error("pairing_failed");
+      const result = await response.json() as { pairingUrl: string };
+      setPairingUrl(result.pairingUrl);
+      window.location.href = result.pairingUrl;
+    } catch {
+      setToast("No se pudo crear el enlace · vuelve a iniciar sesión");
+    } finally {
+      setPairingLoading(false);
+    }
   };
 
   return (
@@ -243,8 +241,8 @@ export default function Home() {
           <span>VESTA</span>
         </button>
         <div className="top-actions">
-          <button className="quiet-button" onClick={installApp}>Instalar</button>
-          <button className="avatar-button" aria-label="Perfil de Alan">AL</button>
+          <button className="quiet-button" onClick={() => setShowCloud(true)}>App nativa</button>
+          <button className="avatar-button" onClick={() => setShowCloud(true)} aria-label="Nube privada de Alan">AL</button>
         </div>
       </header>
 
@@ -469,24 +467,30 @@ export default function Home() {
                 <button className="text-button center danger-text" onClick={clearBatch}>Eliminar selección local</button>
               </>
             )}
-            {!selectedPhotos.length && <p className="pipeline-note">El detector de prendas se conectará después de que decidamos juntos dónde procesar tus fotos.</p>}
+            {!selectedPhotos.length && <p className="pipeline-note">La app nativa será la vía principal para subir fotos a la nube privada y seguir su procesamiento.</p>}
           </section>
         </div>
       )}
 
-      {showInstall && (
-        <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && setShowInstall(false)}>
-          <section className="install-modal" aria-labelledby="install-title">
-            <button className="sheet-close" onClick={() => setShowInstall(false)} aria-label="Cerrar">×</button>
+      {showCloud && (
+        <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && setShowCloud(false)}>
+          <section className="install-modal cloud-modal" aria-labelledby="cloud-title">
+            <button className="sheet-close" onClick={() => setShowCloud(false)} aria-label="Cerrar">×</button>
             <span className="app-icon-preview">V</span>
-            <p className="eyebrow">En tu pantalla de inicio</p>
-            <h2 id="install-title">Instala Vesta en 20 segundos.</h2>
-            <ol>
-              <li><span>1</span><p>Abre este enlace en <strong>Safari</strong> en iPhone o <strong>Chrome</strong> en Android.</p></li>
-              <li><span>2</span><p>Toca <strong>Compartir</strong> y luego <strong>“Añadir a pantalla de inicio”</strong>.</p></li>
-              <li><span>3</span><p>Confirma con <strong>Añadir</strong>. Se abrirá como una app normal.</p></li>
-            </ol>
-            <button className="primary-button" onClick={() => setShowInstall(false)}>Entendido</button>
+            <p className="eyebrow">Backend y panel privado</p>
+            <h2 id="cloud-title">Conecta la app nativa.</h2>
+            <p>Esta web administra tu nube. D1 guarda el inventario y los trabajos; R2 guarda todas las imágenes sin hacerlas públicas.</p>
+            <div className="cloud-facts">
+              <div><span>Originales</span><strong>R2 privado</strong></div>
+              <div><span>PNG y renders</span><strong>R2 privado</strong></div>
+              <div><span>Prendas y estados</span><strong>D1 privado</strong></div>
+              <div><span>Acceso</span><strong>Solo Alan</strong></div>
+            </div>
+            <button className="primary-button" disabled={pairingLoading} onClick={startPairing}>
+              {pairingLoading ? "Creando enlace seguro…" : "Emparejar app nativa"}
+            </button>
+            {pairingUrl && <a className="pairing-link" href={pairingUrl}>Abrir nuevamente en Vesta →</a>}
+            <p className="pairing-note">Hazlo desde este teléfono después de instalar la app. El enlace caduca en 10 minutos y solo puede usarse una vez.</p>
           </section>
         </div>
       )}

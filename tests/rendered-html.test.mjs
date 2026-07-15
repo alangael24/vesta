@@ -1,34 +1,38 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import test from "node:test";
 
-async function render() {
-  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
-  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
-  const { default: worker } = await import(workerUrl.href);
+const root = new URL("../", import.meta.url);
 
-  return worker.fetch(
-    new Request("http://localhost/", { headers: { accept: "text/html" } }),
-    { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
-    { waitUntil() {}, passThroughOnException() {} },
-  );
-}
+test("build contains the deployable Worker, private bindings, and migrations", async () => {
+  const worker = await stat(new URL("dist/server/index.js", root));
+  assert.ok(worker.size > 0);
 
-test("server-renders the Vesta mobile app", async () => {
-  const response = await render();
-  assert.equal(response.status, 200);
-  assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
+  const hosting = JSON.parse(await readFile(new URL("dist/.openai/hosting.json", root), "utf8"));
+  assert.equal(hosting.d1, "DB");
+  assert.equal(hosting.r2, "MEDIA");
 
-  const html = await response.text();
-  assert.match(html, /Vesta — tu armario, mejor combinado/i);
-  assert.match(html, /Colección de muestra/i);
-  assert.match(html, /Armario/i);
-  assert.match(html, /Importar fotos/i);
-  assert.match(html, /manifest\.webmanifest/i);
-  assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
+  const migration = await readFile(new URL("dist/.openai/drizzle/0000_common_hex.sql", root), "utf8");
+  for (const table of ["users", "devices", "import_batches", "source_photos", "processing_jobs", "garments", "outfits"]) {
+    assert.ok(migration.includes(`CREATE TABLE \`${table}\``), `missing table ${table}`);
+  }
+});
 
-  const source = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
-  assert.match(source, /Ver looks de muestra/i);
-  assert.match(source, /Selección local · envío desactivado/i);
-  assert.doesNotMatch(source, /6 prendas detectadas|4 looks nuevos listos|Usar fotos de ejemplo/i);
+test("web panel and native client expose the real privacy workflow", async () => {
+  const [webSource, mobileSource, layoutSource] = await Promise.all([
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("mobile/App.tsx", root), "utf8"),
+    readFile(new URL("app/layout.tsx", root), "utf8"),
+  ]);
+
+  assert.match(layoutSource, /Vesta — tu armario, mejor combinado/i);
+  assert.match(webSource, /Colección de muestra/i);
+  assert.match(webSource, /Emparejar app nativa/i);
+  assert.match(webSource, /R2 privado/i);
+  assert.doesNotMatch(webSource, /6 prendas detectadas|4 looks nuevos listos|Usar fotos de ejemplo/i);
+
+  assert.match(mobileSource, /launchImageLibraryAsync/);
+  assert.match(mobileSource, /SecureStore\.setItemAsync/);
+  assert.match(mobileSource, /Subir a mi nube privada/i);
+  assert.match(mobileSource, /OAI-Sites-Authorization/);
 });

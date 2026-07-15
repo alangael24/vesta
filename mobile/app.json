@@ -1,0 +1,36 @@
+{
+  "expo": {
+    "name": "Vesta",
+    "slug": "vesta-native",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "vesta",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.alangael.vesta",
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "Vesta necesita acceso a las fotos que elijas para crear tu armario privado."
+      }
+    },
+    "android": {
+      "package": "com.alangael.vesta",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#F3EFE5"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Vesta accede únicamente a las fotos que elijas para crear tu armario privado.",
+          "microphonePermission": false
+        }
+      ]
+    ]
+  }
+}

@@ -530,6 +530,12 @@ h1, h2, p { margin-top: 0; }
 .install-modal li > span { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 50%; background: var(--ink); color: white; font-size: 10px; }
 .install-modal li p { margin: 2px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .install-modal li strong { color: var(--ink); }
+.cloud-facts { margin: 22px 0; border-top: 1px solid var(--line); }
+.cloud-facts div { display: flex; justify-content: space-between; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 10px; text-align: left; }
+.cloud-facts span { color: var(--muted); }
+.cloud-facts strong { color: #53644f; }
+.pairing-link { display: block; margin-top: 15px; color: var(--ink); font-size: 10px; font-weight: 650; text-decoration: underline; text-underline-offset: 3px; }
+.pairing-note { margin: 14px 4px 0 !important; font-size: 9px !important; }
 
 .toast {
   position: fixed;
