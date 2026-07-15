@@ -1,7 +1,8 @@
 import { and, eq } from "drizzle-orm";
 import { getDb } from "@/db";
-import { outfits } from "@/db/schema";
+import { garments, outfitItems, outfits, users } from "@/db/schema";
 import { requireDevice } from "@/lib/device-auth";
+import { snapshotGarment } from "@/lib/outfit-snapshot";
 import { getMediaBucket, outfitRenderKey } from "@/lib/storage";
 
 type RouteContext = { params: Promise<{ outfitId: string }> };
@@ -21,7 +22,11 @@ export async function PUT(request: Request, context: RouteContext) {
 
   const { outfitId } = await context.params;
   const db = getDb();
-  const [outfit] = await db.select({ id: outfits.id }).from(outfits).where(and(
+  const [outfit] = await db.select({
+    id: outfits.id,
+    piecesSnapshotJson: outfits.piecesSnapshotJson,
+    avatarVersion: outfits.avatarVersion,
+  }).from(outfits).where(and(
     eq(outfits.id, outfitId),
     eq(outfits.ownerId, identity.ownerId),
   )).limit(1);
@@ -37,8 +42,26 @@ export async function PUT(request: Request, context: RouteContext) {
     httpMetadata: { contentType: "image/png" },
     customMetadata: { ownerId: identity.ownerId, outfitId, purpose: "private-virtual-try-on-render" },
   });
+  const snapshotRows = outfit.piecesSnapshotJson ? [] : await db.select({
+    id: garments.id,
+    name: garments.name,
+    category: garments.category,
+    type: garments.type,
+    color: garments.color,
+    material: garments.material,
+    description: garments.description,
+    confidence: garments.confidence,
+    position: outfitItems.position,
+  }).from(outfitItems)
+    .innerJoin(garments, eq(garments.id, outfitItems.garmentId))
+    .where(eq(outfitItems.outfitId, outfitId));
+  snapshotRows.sort((left, right) => left.position - right.position);
+  const [owner] = outfit.avatarVersion ? [] : await db.select({ avatarVersion: users.avatarVersion })
+    .from(users).where(eq(users.id, identity.ownerId)).limit(1);
   await db.update(outfits).set({
     renderKey: key,
+    piecesSnapshotJson: outfit.piecesSnapshotJson || JSON.stringify(snapshotRows.map(snapshotGarment)),
+    avatarVersion: outfit.avatarVersion || owner?.avatarVersion || null,
     status: "ready",
     updatedAt: new Date().toISOString(),
   }).where(and(eq(outfits.id, outfitId), eq(outfits.ownerId, identity.ownerId)));

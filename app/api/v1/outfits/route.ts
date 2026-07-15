@@ -1,7 +1,8 @@
 import { and, asc, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { getDb } from "@/db";
-import { garments, outfitItems, outfits } from "@/db/schema";
+import { garments, outfitItems, outfits, users } from "@/db/schema";
 import { requireDevice } from "@/lib/device-auth";
+import { parsePiecesSnapshot, snapshotGarment } from "@/lib/outfit-snapshot";
 import { signatureFor, suggestOutfits } from "@/lib/outfit-suggestions";
 
 export async function GET(request: Request) {
@@ -23,7 +24,11 @@ export async function POST(request: Request) {
     category: garments.category,
     type: garments.type,
     color: garments.color,
+    material: garments.material,
     description: garments.description,
+    confidence: garments.confidence,
+    status: garments.status,
+    cutoutKey: garments.cutoutKey,
   }).from(garments).where(and(
     eq(garments.ownerId, identity.ownerId),
     inArray(garments.status, ["candidate", "qa", "approved"]),
@@ -49,6 +54,10 @@ export async function POST(request: Request) {
     }, { status: 409, headers: privateHeaders() });
   }
 
+  const [owner] = await db.select({ avatarVersion: users.avatarVersion }).from(users)
+    .where(eq(users.id, identity.ownerId)).limit(1);
+  const wardrobeById = new Map(wardrobe.map((garment) => [garment.id, garment]));
+
   const createdOutfitIds: string[] = [];
   for (const suggestion of suggestions) {
     const outfitId = crypto.randomUUID();
@@ -59,6 +68,11 @@ export async function POST(request: Request) {
       name: suggestion.name,
       occasion: suggestion.occasion,
       rationale: suggestion.rationale,
+      piecesSnapshotJson: JSON.stringify(suggestion.garmentIds
+        .map((garmentId) => wardrobeById.get(garmentId))
+        .filter((garment): garment is NonNullable<typeof garment> => Boolean(garment))
+        .map(snapshotGarment)),
+      avatarVersion: owner?.avatarVersion || null,
       status: "saved",
       updatedAt: new Date().toISOString(),
     });
@@ -73,14 +87,25 @@ export async function POST(request: Request) {
 }
 
 async function listOwnerOutfits(ownerId: string) {
-  const rows = await getDb().select({
+  const db = getDb();
+  const outfitRows = await db.select({
     id: outfits.id,
     name: outfits.name,
     occasion: outfits.occasion,
     rationale: outfits.rationale,
     renderKey: outfits.renderKey,
+    piecesSnapshotJson: outfits.piecesSnapshotJson,
+    avatarVersion: outfits.avatarVersion,
     status: outfits.status,
     createdAt: outfits.createdAt,
+    updatedAt: outfits.updatedAt,
+  }).from(outfits)
+    .where(eq(outfits.ownerId, ownerId))
+    .orderBy(desc(outfits.createdAt));
+
+  const outfitIds = outfitRows.map((outfit) => outfit.id);
+  const rows = outfitIds.length ? await db.select({
+    outfitId: outfitItems.outfitId,
     position: outfitItems.position,
     garmentId: garments.id,
     garmentName: garments.name,
@@ -92,32 +117,15 @@ async function listOwnerOutfits(ownerId: string) {
     confidence: garments.confidence,
     garmentStatus: garments.status,
     cutoutKey: garments.cutoutKey,
-  }).from(outfits)
-    .innerJoin(outfitItems, eq(outfitItems.outfitId, outfits.id))
+  }).from(outfitItems)
     .innerJoin(garments, eq(garments.id, outfitItems.garmentId))
-    .where(eq(outfits.ownerId, ownerId))
-    .orderBy(desc(outfits.createdAt), asc(outfitItems.position));
+    .where(inArray(outfitItems.outfitId, outfitIds))
+    .orderBy(asc(outfitItems.position)) : [];
 
-  const result = new Map<string, {
-    id: string;
-    name: string;
-    occasion: string;
-    note: string;
-    renderPath: string | null;
-    status: string;
-    pieces: Array<Record<string, unknown>>;
-  }>();
+  const livePieces = new Map<string, Array<Record<string, unknown>>>();
   for (const row of rows) {
-    const outfit = result.get(row.id) || {
-      id: row.id,
-      name: row.name,
-      occasion: row.occasion,
-      note: row.rationale,
-      renderPath: row.renderKey ? `/api/v1/media/outfits/${row.id}` : null,
-      status: row.status,
-      pieces: [],
-    };
-    outfit.pieces.push({
+    const pieces = livePieces.get(row.outfitId) || [];
+    pieces.push({
       id: row.garmentId,
       name: row.garmentName,
       category: row.category,
@@ -130,9 +138,30 @@ async function listOwnerOutfits(ownerId: string) {
       imagePath: row.cutoutKey ? `/api/v1/media/garments/${row.garmentId}` : null,
       imageKind: row.cutoutKey ? "cutout" : "evidence",
     });
-    result.set(row.id, outfit);
+    livePieces.set(row.outfitId, pieces);
   }
-  return Array.from(result.values());
+
+  return outfitRows.map((outfit) => {
+    const currentPieces = livePieces.get(outfit.id) || [];
+    const currentById = new Map(currentPieces.map((piece) => [String(piece.id), piece]));
+    const snapshot = parsePiecesSnapshot(outfit.piecesSnapshotJson);
+    const pieces = snapshot ? snapshot.map((piece) => ({
+      ...piece,
+      status: currentById.get(piece.id)?.status || "archived",
+      imagePath: currentById.get(piece.id)?.imagePath || null,
+      imageKind: currentById.get(piece.id)?.imageKind || undefined,
+    })) : currentPieces;
+    return {
+      id: outfit.id,
+      name: outfit.name,
+      occasion: outfit.occasion,
+      note: outfit.rationale,
+      renderPath: outfit.renderKey ? `/api/v1/media/outfits/${outfit.id}?v=${encodeURIComponent(outfit.updatedAt)}` : null,
+      avatarVersion: outfit.avatarVersion,
+      status: outfit.status,
+      pieces,
+    };
+  });
 }
 
 async function safeJson(request: Request): Promise<{ count?: number } | null> {

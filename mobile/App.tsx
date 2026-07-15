@@ -34,6 +34,7 @@ import {
   analyzeExperimentalInventory,
   EXPERIMENTAL_CODEX_MODEL,
   ExperimentalPhoto,
+  generateExperimentalAvatarImage,
   generateExperimentalGarmentImage,
   generateExperimentalTryOnImage,
 } from "./experimental-inventory";
@@ -69,6 +70,8 @@ type Outfit = {
   occasion: string;
   note: string;
   renderPath?: string | null;
+  localRenderUri?: string | null;
+  avatarVersion?: string | null;
   status?: string;
   pieces: WardrobeItem[];
 };
@@ -112,6 +115,12 @@ type CloudGarment = {
   imageKind?: "cutout" | "evidence";
 };
 
+type CloudAvatar = {
+  mediaPath: string;
+  version: string;
+  updatedAt?: string | null;
+};
+
 type CloudOutfit = Omit<Outfit, "pieces"> & { pieces: CloudGarment[] };
 
 const cloudKeys = {
@@ -135,7 +144,6 @@ function tryOnSignatureFor(layers: TryOnLayer[]) {
 }
 
 const wardrobeSprite = require("./assets/wardrobe-sprite.png") as ImageSourcePropType;
-const alanAvatarBase = require("./assets/alan-avatar-base.jpg") as ImageSourcePropType;
 
 const filters: { id: Category; label: string }[] = [
   { id: "all", label: "Todo" },
@@ -195,10 +203,13 @@ function GarmentVisual({ item, session }: { item: WardrobeItem; session: CloudSe
 }
 
 function OutfitVisual({ outfit, session }: { outfit: Outfit; session: CloudSession | null }) {
-  if (outfit.renderPath && session) {
+  const renderSource = outfit.localRenderUri
+    ? { uri: outfit.localRenderUri }
+    : outfit.renderPath && session ? authorizedImageSource(session, outfit.renderPath) : null;
+  if (renderSource) {
     return (
       <View style={styles.outfitCollage}>
-        <Image source={authorizedImageSource(session, outfit.renderPath)} resizeMode="cover" style={styles.outfitRenderImage} />
+        <Image source={renderSource} resizeMode="cover" style={styles.outfitRenderImage} />
         <View style={styles.outfitReadyBadge}><Text style={styles.outfitReadyBadgeText}>LOOK REAL</Text></View>
       </View>
     );
@@ -315,6 +326,15 @@ export default function App() {
   const [filter, setFilter] = useState<Category>("all");
   const [importOpen, setImportOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [avatarOpen, setAvatarOpen] = useState(false);
+  const [avatarSelfie, setAvatarSelfie] = useState<ImagePicker.ImagePickerAsset | null>(null);
+  const [avatarFullBody, setAvatarFullBody] = useState<ImagePicker.ImagePickerAsset | null>(null);
+  const [avatarConsent, setAvatarConsent] = useState(false);
+  const [avatarGenerating, setAvatarGenerating] = useState(false);
+  const [avatarSaving, setAvatarSaving] = useState(false);
+  const [avatarDraftUri, setAvatarDraftUri] = useState<string | null>(null);
+  const [cloudAvatar, setCloudAvatar] = useState<CloudAvatar | null>(null);
+  const [localAvatarUri, setLocalAvatarUri] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<WardrobeItem | null>(null);
   const [selectedOutfit, setSelectedOutfit] = useState<Outfit | null>(null);
   const [photos, setPhotos] = useState<ImagePicker.ImagePickerAsset[]>([]);
@@ -348,9 +368,11 @@ export default function App() {
   const tryOnCanvasRef = useRef<View | null>(null);
   const tryOnCanvasWindow = useRef<WindowBounds | null>(null);
   const tryOnAvatarBase64 = useRef<string | null>(null);
+  const avatarDraftBase64 = useRef<string | null>(null);
   const tryOnGarmentBase64 = useRef(new Map<string, string>());
   const automaticCloudConnectionStarted = useRef(false);
   const pendingAnalysisOffered = useRef(false);
+  const avatarOnboardingOffered = useRef(false);
 
   const activeWardrobe = cloudWardrobe;
 
@@ -386,7 +408,7 @@ export default function App() {
         },
         body: JSON.stringify({
           code,
-          name: Device.deviceName || (Platform.OS === "ios" ? "iPhone de Alan" : "Android de Alan"),
+          name: Device.deviceName || (Platform.OS === "ios" ? "iPhone personal" : "Android personal"),
           platform: Platform.OS,
         }),
       });
@@ -453,9 +475,13 @@ export default function App() {
     if (!cloudSession) {
       setCloudWardrobe([]);
       setOutfits([]);
+      setCloudAvatar(null);
+      setLocalAvatarUri(null);
+      tryOnAvatarBase64.current = null;
+      avatarOnboardingOffered.current = false;
       return;
     }
-    Promise.all([loadWardrobe(cloudSession), loadOutfits(cloudSession)]).catch(() => undefined);
+    Promise.all([loadWardrobe(cloudSession), loadOutfits(cloudSession), loadAvatar(cloudSession)]).catch(() => undefined);
   }, [cloudSession?.apiUrl, cloudSession?.deviceToken]);
 
   async function loadWardrobe(session = cloudSession) {
@@ -481,17 +507,128 @@ export default function App() {
     if (!session) return;
     setOutfitsLoading(true);
     try {
+      const indexPath = outfitIndexCachePath(session);
+      if (indexPath) {
+        const info = await FileSystem.getInfoAsync(indexPath).catch(() => null);
+        if (info?.exists) {
+          try {
+            const cachedOutfits = JSON.parse(await FileSystem.readAsStringAsync(indexPath)) as Outfit[];
+            if (Array.isArray(cachedOutfits)) {
+              setOutfits(cachedOutfits);
+              cacheOutfitRenders(session, cachedOutfits).catch(() => undefined);
+            }
+          } catch {
+            // A damaged local index never replaces the private cloud source of truth.
+          }
+        }
+      }
       const response = await cloudFetch(session, "/api/v1/outfits", { method: "GET" });
       if (!response.ok) return;
       const result = await response.json() as { outfits?: CloudOutfit[] };
-      setOutfits(outfitsForUi(result.outfits || []));
+      const mappedOutfits = outfitsForUi(result.outfits || []);
+      setOutfits(mappedOutfits);
+      if (indexPath) {
+        await FileSystem.writeAsStringAsync(indexPath, JSON.stringify(mappedOutfits));
+      }
+      cacheOutfitRenders(session, mappedOutfits).catch(() => undefined);
     } finally {
       setOutfitsLoading(false);
     }
   }
 
+  async function loadAvatar(session = cloudSession) {
+    if (!session) return;
+    const cachedPath = avatarCachePath(session);
+    if (cachedPath) {
+      const cached = await FileSystem.getInfoAsync(cachedPath).catch(() => null);
+      if (cached?.exists) setLocalAvatarUri(cachedPath);
+    }
+    const response = await cloudFetch(session, "/api/v1/avatar", { method: "GET" });
+    if (!response.ok) return;
+    const result = await response.json() as { avatar?: CloudAvatar | null };
+    if (!result.avatar) {
+      setCloudAvatar(null);
+      setLocalAvatarUri(null);
+      tryOnAvatarBase64.current = null;
+      if (cachedPath) await FileSystem.deleteAsync(cachedPath, { idempotent: true }).catch(() => undefined);
+      if (!avatarOnboardingOffered.current) {
+        avatarOnboardingOffered.current = true;
+        setAvatarOpen(true);
+      }
+      return;
+    }
+    setCloudAvatar(result.avatar);
+    if (!cachedPath) return;
+    const nextPath = `${cachedPath}.next`;
+    await FileSystem.deleteAsync(nextPath, { idempotent: true }).catch(() => undefined);
+    const download = await FileSystem.downloadAsync(`${session.apiUrl}${result.avatar.mediaPath}`, nextPath, {
+      headers: {
+        "OAI-Sites-Authorization": `Bearer ${session.dispatchToken}`,
+        "x-vesta-device-token": session.deviceToken,
+      },
+      sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
+    });
+    if (download.status < 200 || download.status >= 300) return;
+    await FileSystem.deleteAsync(cachedPath, { idempotent: true }).catch(() => undefined);
+    await FileSystem.moveAsync({ from: nextPath, to: cachedPath });
+    setLocalAvatarUri(cachedPath);
+    tryOnAvatarBase64.current = null;
+  }
+
+  async function cacheOutfitRenders(session: CloudSession, values: Outfit[]) {
+    for (const outfit of values.filter((entry) => entry.renderPath)) {
+      const localPath = outfitCachePath(session, outfit.id);
+      if (!localPath || !outfit.renderPath) continue;
+      const info = await FileSystem.getInfoAsync(localPath).catch(() => null);
+      if (!info?.exists) {
+        const download = await FileSystem.downloadAsync(`${session.apiUrl}${outfit.renderPath}`, localPath, {
+          headers: {
+            "OAI-Sites-Authorization": `Bearer ${session.dispatchToken}`,
+            "x-vesta-device-token": session.deviceToken,
+          },
+          sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
+        }).catch(() => null);
+        if (!download || download.status < 200 || download.status >= 300) continue;
+      }
+      setOutfits((current) => current.map((entry) => entry.id === outfit.id ? { ...entry, localRenderUri: localPath } : entry));
+      setSelectedOutfit((current) => current?.id === outfit.id ? { ...current, localRenderUri: localPath } : current);
+    }
+  }
+
+  async function accountAvatarBase64() {
+    if (tryOnAvatarBase64.current) return tryOnAvatarBase64.current;
+    if (!cloudSession) throw new Error("avatar_cloud_unavailable");
+    const localPath = localAvatarUri || avatarCachePath(cloudSession);
+    if (localPath) {
+      const info = await FileSystem.getInfoAsync(localPath).catch(() => null);
+      if (info?.exists) {
+        tryOnAvatarBase64.current = await FileSystem.readAsStringAsync(localPath, { encoding: FileSystem.EncodingType.Base64 });
+        return tryOnAvatarBase64.current;
+      }
+    }
+    if (!cloudAvatar?.mediaPath || !localPath) throw new Error("avatar_required");
+    const download = await FileSystem.downloadAsync(`${cloudSession.apiUrl}${cloudAvatar.mediaPath}`, localPath, {
+      headers: {
+        "OAI-Sites-Authorization": `Bearer ${cloudSession.dispatchToken}`,
+        "x-vesta-device-token": cloudSession.deviceToken,
+      },
+      sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
+    });
+    if (download.status < 200 || download.status >= 300) throw new Error(`avatar_download_${download.status}`);
+    setLocalAvatarUri(localPath);
+    tryOnAvatarBase64.current = await FileSystem.readAsStringAsync(localPath, { encoding: FileSystem.EncodingType.Base64 });
+    return tryOnAvatarBase64.current;
+  }
+
   async function generateSavedOutfits() {
     if (!cloudSession || outfitGenerating) return;
+    if (!localAvatarUri && !cloudAvatar) {
+      Alert.alert("Crea tu avatar primero", "Vesta necesita tu avatar privado antes de poder mostrar cómo te quedan los Looks.", [
+        { text: "Después", style: "cancel" },
+        { text: "Crear avatar", onPress: () => setAvatarOpen(true) },
+      ]);
+      return;
+    }
     if (!codexConnected) {
       Alert.alert(
         "Conecta ChatGPT para crear tus fotos",
@@ -547,6 +684,11 @@ export default function App() {
 
   async function createOutfitPhotograph(outfit: Outfit) {
     if (!cloudSession || outfitGenerating) return;
+    if (!localAvatarUri && !cloudAvatar) {
+      setSelectedOutfit(null);
+      setAvatarOpen(true);
+      return;
+    }
     if (!codexConnected) {
       Alert.alert(
         "Conecta ChatGPT para crear esta foto",
@@ -574,13 +716,13 @@ export default function App() {
       const outfit = targets[index];
       setOutfitGenerationProgress({ current: index + 1, total: targets.length });
       try {
-        const renderPath = await renderOutfitPhotograph(outfit);
+        const { renderPath, localRenderUri } = await renderOutfitPhotograph(outfit);
         const freshRenderPath = `${renderPath}?v=${Date.now()}`;
         setOutfits((current) => current.map((entry) => entry.id === outfit.id
-          ? { ...entry, renderPath: freshRenderPath, status: "ready" }
+          ? { ...entry, renderPath: freshRenderPath, localRenderUri, status: "ready" }
           : entry));
         setSelectedOutfit((current) => current?.id === outfit.id
-          ? { ...current, renderPath: freshRenderPath, status: "ready" }
+          ? { ...current, renderPath: freshRenderPath, localRenderUri, status: "ready" }
           : current);
         completed += 1;
       } catch (error) {
@@ -593,6 +735,7 @@ export default function App() {
         }
       }
     }
+    if (completed > 0 && cloudSession) await loadOutfits(cloudSession).catch(() => undefined);
     if (completed === targets.length) {
       Alert.alert(
         targets.length === 1 ? "Tu Look está listo" : "Tus Looks están listos",
@@ -613,10 +756,7 @@ export default function App() {
     if (!cloudSession || !FileSystem.cacheDirectory) throw new Error("outfit_cloud_unavailable");
     const temporaryPaths: string[] = [];
     try {
-      if (!tryOnAvatarBase64.current) {
-        const avatarAsset = Image.resolveAssetSource(alanAvatarBase);
-        tryOnAvatarBase64.current = await FileSystem.readAsStringAsync(avatarAsset.uri, { encoding: FileSystem.EncodingType.Base64 });
-      }
+      const avatarBase64 = await accountAvatarBase64();
       const garmentInputs = [];
       for (const item of outfit.pieces.filter((piece) => piece.imagePath && piece.imageKind === "cutout")) {
         const cacheKey = `${item.id}:${item.imagePath}`;
@@ -650,8 +790,13 @@ export default function App() {
         });
       }
       if (!garmentInputs.length) throw new Error("outfit_cutouts_missing");
-      const result = await generateExperimentalTryOnImage(tryOnAvatarBase64.current, garmentInputs, "low");
-      return await uploadOutfitRender(cloudSession, outfit.id, result);
+      const result = await generateExperimentalTryOnImage(avatarBase64, garmentInputs, "low");
+      const renderPath = await uploadOutfitRender(cloudSession, outfit.id, result);
+      const localRenderUri = outfitCachePath(cloudSession, outfit.id);
+      if (localRenderUri) {
+        await FileSystem.writeAsStringAsync(localRenderUri, result, { encoding: FileSystem.EncodingType.Base64 });
+      }
+      return { renderPath, localRenderUri };
     } finally {
       await Promise.all(temporaryPaths.map((path) => FileSystem.deleteAsync(path, { idempotent: true }).catch(() => undefined)));
     }
@@ -737,6 +882,121 @@ export default function App() {
     } finally {
       setPicking(false);
     }
+  };
+
+  const pickAvatarReference = async (kind: "selfie" | "body") => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert("Permiso necesario", "Vesta solo verá la foto que selecciones para crear tu avatar.");
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsMultipleSelection: false,
+      selectionLimit: 1,
+      quality: 1,
+      exif: false,
+      base64: false,
+    });
+    if (result.canceled || !result.assets[0]) return;
+    await discardAvatarDraft();
+    if (kind === "selfie") setAvatarSelfie(result.assets[0]);
+    else setAvatarFullBody(result.assets[0]);
+  };
+
+  const discardAvatarDraft = async () => {
+    const previous = avatarDraftUri;
+    avatarDraftBase64.current = null;
+    setAvatarDraftUri(null);
+    if (previous) await FileSystem.deleteAsync(previous, { idempotent: true }).catch(() => undefined);
+  };
+
+  const generateAvatarDraft = async () => {
+    if (!avatarSelfie || !avatarFullBody || !avatarConsent || avatarGenerating) return;
+    if (!codexConnected) {
+      Alert.alert(
+        "Conecta ChatGPT para crear tu avatar",
+        "Tus referencias se utilizan solo durante esta generación y el resultado se guarda en tu cuenta privada.",
+        [
+          { text: "Ahora no", style: "cancel" },
+          { text: "Conectar", onPress: connectCodexExperiment },
+        ],
+      );
+      return;
+    }
+    if (!FileSystem.cacheDirectory) return;
+    setAvatarGenerating(true);
+    try {
+      const result = await generateExperimentalAvatarImage(avatarSelfie, avatarFullBody);
+      const draftPath = `${FileSystem.cacheDirectory}vesta-avatar-draft-${Date.now()}.png`;
+      await FileSystem.writeAsStringAsync(draftPath, result, { encoding: FileSystem.EncodingType.Base64 });
+      await discardAvatarDraft();
+      avatarDraftBase64.current = result;
+      setAvatarDraftUri(draftPath);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "unknown";
+      if (/codex_not_connected|token_refresh|401/u.test(detail)) setCodexConnected(false);
+      Alert.alert("El avatar no terminó", `Tus fotos siguen en este teléfono y puedes reintentarlo. Detalle técnico: ${detail}`);
+    } finally {
+      setAvatarGenerating(false);
+    }
+  };
+
+  const saveAvatarDraft = async () => {
+    if (!cloudSession || !avatarDraftBase64.current || avatarSaving) return;
+    setAvatarSaving(true);
+    try {
+      const avatar = await uploadAccountAvatar(cloudSession, avatarDraftBase64.current);
+      const cachedPath = avatarCachePath(cloudSession);
+      if (cachedPath) {
+        await FileSystem.writeAsStringAsync(cachedPath, avatarDraftBase64.current, { encoding: FileSystem.EncodingType.Base64 });
+        setLocalAvatarUri(cachedPath);
+      }
+      setCloudAvatar(avatar);
+      tryOnAvatarBase64.current = avatarDraftBase64.current;
+      await discardAvatarDraft();
+      setAvatarSelfie(null);
+      setAvatarFullBody(null);
+      setAvatarConsent(false);
+      setAvatarOpen(false);
+      setProfileOpen(false);
+      Alert.alert("Avatar guardado", "Ya puedes probar prendas y generar Looks. Las fotos originales no se subieron a la nube de Vesta.");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "unknown";
+      Alert.alert("No se guardó el avatar", `El borrador sigue disponible para reintentar. Detalle técnico: ${detail}`);
+    } finally {
+      setAvatarSaving(false);
+    }
+  };
+
+  const deleteAccountAvatar = () => {
+    if (!cloudSession || (!cloudAvatar && !localAvatarUri)) return;
+    Alert.alert(
+      "¿Eliminar tu avatar?",
+      "Tus Looks terminados seguirán guardados como fotografías históricas. Solo se eliminará el avatar base actual.",
+      [
+        { text: "Cancelar", style: "cancel" },
+        {
+          text: "Eliminar",
+          style: "destructive",
+          onPress: async () => {
+            const response = await cloudFetch(cloudSession, "/api/v1/avatar", { method: "DELETE" });
+            if (!response.ok) {
+              Alert.alert("No se eliminó", "Vuelve a intentarlo cuando la cuenta esté sincronizada.");
+              return;
+            }
+            const cachedPath = avatarCachePath(cloudSession);
+            if (cachedPath) await FileSystem.deleteAsync(cachedPath, { idempotent: true }).catch(() => undefined);
+            setCloudAvatar(null);
+            setLocalAvatarUri(null);
+            tryOnAvatarBase64.current = null;
+            await clearTryOn();
+            setAvatarOpen(false);
+            Alert.alert("Avatar eliminado", "Tus Looks guardados permanecen intactos.");
+          },
+        },
+      ],
+    );
   };
 
   const prepareBatch = () => {
@@ -1101,10 +1361,7 @@ export default function App() {
     setTryOnRendering(true);
     const temporaryPaths: string[] = [];
     try {
-      if (!tryOnAvatarBase64.current) {
-        const avatarAsset = Image.resolveAssetSource(alanAvatarBase);
-        tryOnAvatarBase64.current = await FileSystem.readAsStringAsync(avatarAsset.uri, { encoding: FileSystem.EncodingType.Base64 });
-      }
+      const avatarBase64 = await accountAvatarBase64();
       const garmentInputs = [];
       for (const layer of layers) {
         const cacheKey = `${layer.item.id}:${layer.item.imagePath}`;
@@ -1137,7 +1394,7 @@ export default function App() {
           imageBase64,
         });
       }
-      const result = await generateExperimentalTryOnImage(tryOnAvatarBase64.current, garmentInputs, quality);
+      const result = await generateExperimentalTryOnImage(avatarBase64, garmentInputs, quality);
       const outputPath = `${FileSystem.documentDirectory}${TRY_ON_RENDER_PREFIX}-${Date.now()}.png`;
       await FileSystem.writeAsStringAsync(outputPath, result, { encoding: FileSystem.EncodingType.Base64 });
       const previousRender = tryOnRenderedUri;
@@ -1150,7 +1407,12 @@ export default function App() {
     } catch (error) {
       setTryOnLayers(previousLayers);
       const detail = error instanceof Error ? error.message : "unknown";
-      if (/codex_not_connected|token_refresh|401/u.test(detail)) {
+      if (detail === "avatar_required") {
+        Alert.alert("Crea tu avatar primero", "El probador necesita una selfie y una foto de cuerpo completo.", [
+          { text: "Después", style: "cancel" },
+          { text: "Crear avatar", onPress: () => setAvatarOpen(true) },
+        ]);
+      } else if (/codex_not_connected|token_refresh|401/u.test(detail)) {
         setCodexConnected(false);
         Alert.alert("Vuelve a conectar ChatGPT", "La sesión experimental expiró. Reconéctala desde tu perfil y vuelve a soltar la prenda.");
       } else if (detail === "moderation_blocked") {
@@ -1249,6 +1511,13 @@ export default function App() {
 
   const generateTryOnOutfit = () => {
     if (tryOnRendering || !tryOnLayers.length) return;
+    if (!localAvatarUri && !cloudAvatar) {
+      Alert.alert("Crea tu avatar primero", "Después podrás usarlo con una o varias prendas sin volver a configurarlo.", [
+        { text: "Después", style: "cancel" },
+        { text: "Crear avatar", onPress: () => setAvatarOpen(true) },
+      ]);
+      return;
+    }
     if (!codexConnected) {
       Alert.alert(
         "Conecta ChatGPT para probar el outfit",
@@ -1287,6 +1556,9 @@ export default function App() {
   const selectedTryOnSignature = tryOnSignatureFor(tryOnLayers);
   const tryOnHasPendingChanges = tryOnLayers.length > 0 && selectedTryOnSignature !== tryOnRenderedSignature;
   const pendingOutfitCount = outfits.filter((outfit) => !outfit.renderPath).length;
+  const avatarDisplaySource = localAvatarUri
+    ? { uri: localAvatarUri }
+    : cloudAvatar && cloudSession ? authorizedImageSource(cloudSession, cloudAvatar.mediaPath) : null;
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -1306,7 +1578,9 @@ export default function App() {
             <Text style={[styles.cloudBadgeText, !cloudSession && styles.cloudBadgePending]}>{tryOnRendering ? "VISTIENDO AVATAR…" : processing ? experimentalProgress ? `ANALIZANDO ${experimentalProgress}%` : "ANALIZANDO…" : reconstructingId ? "CREANDO PNG…" : cloudSession ? "CUENTA PROTEGIDA" : "PREPARANDO CUENTA…"}</Text>
           </View>
           <Pressable style={styles.avatar} onPress={() => setProfileOpen(true)} accessibilityLabel="Privacidad y perfil">
-            <Text style={styles.avatarText}>AL</Text>
+            {avatarDisplaySource
+              ? <Image source={avatarDisplaySource} resizeMode="cover" style={styles.avatarThumb} />
+              : <Text style={styles.avatarText}>YO</Text>}
           </Pressable>
         </View>
 
@@ -1407,7 +1681,17 @@ export default function App() {
               onLayout={() => requestAnimationFrame(measureTryOnCanvas)}
             >
               <View style={styles.tryOnCanvasHalo} />
-              <Image source={tryOnRenderedUri ? { uri: tryOnRenderedUri } : alanAvatarBase} resizeMode="contain" style={styles.tryOnAvatarImage} />
+              {tryOnRenderedUri
+                ? <Image source={{ uri: tryOnRenderedUri }} resizeMode="contain" style={styles.tryOnAvatarImage} />
+                : avatarDisplaySource
+                  ? <Image source={avatarDisplaySource} resizeMode="contain" style={styles.tryOnAvatarImage} />
+                  : (
+                    <Pressable style={styles.avatarPlaceholder} onPress={() => setAvatarOpen(true)}>
+                      <Text style={styles.avatarPlaceholderIcon}>◇</Text>
+                      <Text style={styles.avatarPlaceholderTitle}>CREA TU AVATAR</Text>
+                      <Text style={styles.avatarPlaceholderCopy}>Selfie + cuerpo completo</Text>
+                    </Pressable>
+                  )}
               {wardrobeDrag && (() => {
                 const region = bodyRegionFor(wardrobeDrag.item);
                 return (
@@ -1435,7 +1719,7 @@ export default function App() {
                   </View>
                 </View>
               )}
-              {tryOnLayers.length === 0 && !tryOnRendering && (
+              {tryOnLayers.length === 0 && !tryOnRendering && avatarDisplaySource && (
                 <View pointerEvents="none" style={styles.tryOnHint}>
                   <Text style={styles.tryOnHintIcon}>↓</Text>
                   <Text style={styles.tryOnHintText}>ELIGE UNA PRENDA</Text>
@@ -1591,23 +1875,102 @@ export default function App() {
         <View style={styles.modalBackdrop}>
           <View style={styles.profileSheet}>
             <Pressable style={styles.closeButton} onPress={() => setProfileOpen(false)}><Text style={styles.closeText}>×</Text></Pressable>
-            <View style={styles.profileAvatar}><Text style={styles.profileAvatarText}>AL</Text></View>
-            <Text style={[styles.eyebrow, styles.centerText]}>VESTA DE ALAN</Text>
-            <Text style={styles.modalTitle}>Tu nube privada.</Text>
-            <Text style={styles.modalIntro}>La app nativa hablará con un backend privado. Nada tendrá una URL pública.</Text>
-            <View style={styles.architectureCard}>
-              <View style={styles.architectureRow}><Text style={styles.architectureLabel}>ORIGINALES</Text><Text style={styles.architectureValue}>Privados</Text></View>
-              <View style={styles.architectureRow}><Text style={styles.architectureLabel}>PNG Y RENDERS</Text><Text style={styles.architectureValue}>Privados</Text></View>
-              <View style={styles.architectureRow}><Text style={styles.architectureLabel}>DUPLICADOS APARTADOS</Text><Text style={styles.architectureValue}>{duplicateCount}</Text></View>
-              <View style={styles.architectureRow}><Text style={styles.architectureLabel}>ACCESO</Text><Text style={styles.architectureValue}>Solo Alan</Text></View>
-              <View style={styles.architectureRow}><Text style={styles.architectureLabel}>ESTADO</Text><Text style={cloudSession ? styles.architectureValue : styles.architecturePending}>{cloudSession ? "Protegida y sincronizada" : pairing ? "Preparando cuenta…" : "Configurando…"}</Text></View>
-              <View style={styles.architectureRow}><Text style={styles.architectureLabel}>CHATGPT · PRUEBA</Text><Text style={codexConnected ? styles.architectureValue : styles.architecturePending}>{codexConnected ? "Conectado" : codexConnecting ? "Esperando autorización…" : "Desconectado"}</Text></View>
-            </View>
-            <Text style={styles.profileFootnote}>{cloudSession ? `${cloudWardrobe.length ? `${cloudWardrobe.length} prendas reales sincronizadas. ` : ""}La nube privada pertenece a esta cuenta y la credencial del dispositivo está protegida por el llavero del sistema.` : "Vesta está creando automáticamente el espacio privado de esta cuenta."}</Text>
-            {cloudSession && <Pressable style={styles.secondaryButton} onPress={() => loadWardrobe()} disabled={wardrobeLoading}><Text style={styles.secondaryButtonText}>{wardrobeLoading ? "Sincronizando…" : "Sincronizar armario"}</Text></Pressable>}
-            <Text style={styles.experimentalNote}>MODO PERSONAL EXPERIMENTAL · Usa tu suscripción solo para analizar fotos. Los tokens permanecen en este iPhone.</Text>
-            {!codexConnected && <Pressable style={[styles.fullButton, styles.experimentalButton, codexConnecting && styles.disabledButton]} onPress={connectCodexExperiment} disabled={codexConnecting}><Text style={styles.fullButtonText}>{codexConnecting ? "Esperando autorización…" : "Continuar con ChatGPT · prueba"}</Text></Pressable>}
-            {codexConnected && <Pressable style={[styles.secondaryButton, styles.experimentalButton]} onPress={disconnectCodexExperiment}><Text style={styles.secondaryButtonText}>Cerrar sesión experimental</Text></Pressable>}
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <View style={styles.profileAvatar}>
+                {avatarDisplaySource
+                  ? <Image source={avatarDisplaySource} resizeMode="cover" style={styles.profileAvatarImage} />
+                  : <Text style={styles.profileAvatarText}>YO</Text>}
+              </View>
+              <Text style={[styles.eyebrow, styles.centerText]}>TU VESTA</Text>
+              <Text style={styles.modalTitle}>Tu nube privada.</Text>
+              <Text style={styles.modalIntro}>Cada cuenta tiene su propio avatar, armario y Looks. Las imágenes solo se entregan después de verificar el dispositivo.</Text>
+              <View style={styles.architectureCard}>
+                <View style={styles.architectureRow}><Text style={styles.architectureLabel}>AVATAR</Text><Text style={avatarDisplaySource ? styles.architectureValue : styles.architecturePending}>{avatarDisplaySource ? "Listo y privado" : "Pendiente"}</Text></View>
+                <View style={styles.architectureRow}><Text style={styles.architectureLabel}>ORIGINALES</Text><Text style={styles.architectureValue}>Privados</Text></View>
+                <View style={styles.architectureRow}><Text style={styles.architectureLabel}>PNG Y LOOKS</Text><Text style={styles.architectureValue}>Privados</Text></View>
+                <View style={styles.architectureRow}><Text style={styles.architectureLabel}>DUPLICADOS APARTADOS</Text><Text style={styles.architectureValue}>{duplicateCount}</Text></View>
+                <View style={styles.architectureRow}><Text style={styles.architectureLabel}>ACCESO</Text><Text style={styles.architectureValue}>Solo esta cuenta</Text></View>
+                <View style={styles.architectureRow}><Text style={styles.architectureLabel}>ESTADO</Text><Text style={cloudSession ? styles.architectureValue : styles.architecturePending}>{cloudSession ? "Protegida y sincronizada" : pairing ? "Preparando cuenta…" : "Configurando…"}</Text></View>
+                <View style={styles.architectureRow}><Text style={styles.architectureLabel}>CHATGPT · PRUEBA</Text><Text style={codexConnected ? styles.architectureValue : styles.architecturePending}>{codexConnected ? "Conectado" : codexConnecting ? "Esperando autorización…" : "Desconectado"}</Text></View>
+              </View>
+              <Text style={styles.profileFootnote}>{cloudSession ? `${cloudWardrobe.length ? `${cloudWardrobe.length} prendas reales sincronizadas. ` : ""}El avatar y los Looks pertenecen automáticamente a esta cuenta; las copias locales permiten volver a verlos en este iPhone.` : "Vesta está creando automáticamente el espacio privado de esta cuenta."}</Text>
+              {cloudSession && (
+                <Pressable style={[styles.fullButton, styles.avatarProfileButton]} onPress={() => { setProfileOpen(false); setAvatarOpen(true); }}>
+                  <Text style={styles.fullButtonText}>{avatarDisplaySource ? "Administrar mi avatar" : "Crear mi avatar"}</Text>
+                </Pressable>
+              )}
+              {cloudSession && <Pressable style={styles.secondaryButton} onPress={() => Promise.all([loadWardrobe(), loadOutfits(), loadAvatar()])} disabled={wardrobeLoading}><Text style={styles.secondaryButtonText}>{wardrobeLoading ? "Sincronizando…" : "Sincronizar mi cuenta"}</Text></Pressable>}
+              <Text style={styles.experimentalNote}>MODO EXPERIMENTAL · Tu sesión de ChatGPT se usa únicamente cuando analizas fotos o generas imágenes. Los tokens permanecen en este iPhone.</Text>
+              {!codexConnected && <Pressable style={[styles.fullButton, styles.experimentalButton, codexConnecting && styles.disabledButton]} onPress={connectCodexExperiment} disabled={codexConnecting}><Text style={styles.fullButtonText}>{codexConnecting ? "Esperando autorización…" : "Continuar con ChatGPT · prueba"}</Text></Pressable>}
+              {codexConnected && <Pressable style={[styles.secondaryButton, styles.experimentalButton]} onPress={disconnectCodexExperiment}><Text style={styles.secondaryButtonText}>Cerrar sesión experimental</Text></Pressable>}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={avatarOpen} transparent animationType="slide" onRequestClose={() => setAvatarOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.avatarSheet}>
+            <Pressable style={styles.closeButton} onPress={() => setAvatarOpen(false)}><Text style={styles.closeText}>×</Text></Pressable>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.avatarSheetContent}>
+              <Text style={[styles.eyebrow, styles.centerText]}>IDENTIDAD PRIVADA</Text>
+              <Text style={styles.modalTitle}>{avatarDraftUri ? "¿Este avatar sí eres tú?" : avatarDisplaySource ? "Actualiza tu avatar." : "Crea tu avatar."}</Text>
+              <Text style={styles.modalIntro}>{avatarDraftUri
+                ? "Confirma únicamente si el rostro y las proporciones se parecen a ti. Después se convertirá en la base de todos tus outfits."
+                : "Elige una selfie clara y una foto de cuerpo completo. Vesta creará una base neutral reutilizable para el probador."}</Text>
+
+              {avatarDraftUri ? (
+                <>
+                  <View style={styles.avatarDraftFrame}><Image source={{ uri: avatarDraftUri }} resizeMode="contain" style={styles.avatarDraftImage} /></View>
+                  <View style={styles.privacyPill}><View style={styles.greenDot} /><Text style={styles.privacyPillText}>SOLO SE GUARDA AL CONFIRMAR</Text></View>
+                  <Pressable style={[styles.fullButton, styles.avatarConfirmButton, avatarSaving && styles.disabledButton]} onPress={saveAvatarDraft} disabled={avatarSaving}>
+                    <Text style={styles.fullButtonText}>{avatarSaving ? "Guardando en tu nube…" : "Sí, este soy yo · Guardar"}</Text>
+                  </Pressable>
+                  <Pressable style={styles.secondaryButton} onPress={discardAvatarDraft} disabled={avatarSaving}>
+                    <Text style={styles.secondaryButtonText}>No se parece · Cambiar referencias</Text>
+                  </Pressable>
+                </>
+              ) : (
+                <>
+                  {avatarDisplaySource && (
+                    <View style={styles.currentAvatarCard}>
+                      <Image source={avatarDisplaySource} resizeMode="contain" style={styles.currentAvatarImage} />
+                      <View style={styles.currentAvatarCopy}>
+                        <Text style={styles.currentAvatarEyebrow}>AVATAR ACTUAL</Text>
+                        <Text style={styles.currentAvatarTitle}>Tus Looks históricos no cambiarán.</Text>
+                      </View>
+                    </View>
+                  )}
+                  <View style={styles.avatarReferenceRow}>
+                    <Pressable style={styles.avatarReferenceCard} onPress={() => pickAvatarReference("selfie")}>
+                      {avatarSelfie
+                        ? <Image source={{ uri: avatarSelfie.uri }} resizeMode="cover" style={styles.avatarReferenceImage} />
+                        : <View style={styles.avatarReferenceEmpty}><Text style={styles.avatarReferenceNumber}>01</Text><Text style={styles.avatarReferenceTitle}>Selfie frontal</Text><Text style={styles.avatarReferenceHint}>Cara clara, sin filtros</Text></View>}
+                      {avatarSelfie && <Text style={styles.avatarReferenceChange}>CAMBIAR SELFIE</Text>}
+                    </Pressable>
+                    <Pressable style={styles.avatarReferenceCard} onPress={() => pickAvatarReference("body")}>
+                      {avatarFullBody
+                        ? <Image source={{ uri: avatarFullBody.uri }} resizeMode="cover" style={styles.avatarReferenceImage} />
+                        : <View style={styles.avatarReferenceEmpty}><Text style={styles.avatarReferenceNumber}>02</Text><Text style={styles.avatarReferenceTitle}>Cuerpo completo</Text><Text style={styles.avatarReferenceHint}>Cabeza y pies visibles</Text></View>}
+                      {avatarFullBody && <Text style={styles.avatarReferenceChange}>CAMBIAR FOTO</Text>}
+                    </Pressable>
+                  </View>
+                  <Pressable style={styles.avatarConsentRow} onPress={() => setAvatarConsent((value) => !value)}>
+                    <View style={[styles.avatarConsentBox, avatarConsent && styles.avatarConsentBoxActive]}><Text style={styles.avatarConsentCheck}>{avatarConsent ? "✓" : ""}</Text></View>
+                    <Text style={styles.avatarConsentText}>Soy la persona de ambas fotos o tengo su permiso. Entiendo que se enviarán a ChatGPT para crear el avatar; Vesta no las guardará en su nube.</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.fullButton, styles.avatarConfirmButton, (!avatarSelfie || !avatarFullBody || !avatarConsent || avatarGenerating) && styles.disabledButton]}
+                    onPress={generateAvatarDraft}
+                    disabled={!avatarSelfie || !avatarFullBody || !avatarConsent || avatarGenerating}
+                  >
+                    {avatarGenerating ? <ActivityIndicator color={paper} /> : <Text style={styles.fullButtonText}>✦ Crear vista previa</Text>}
+                  </Pressable>
+                  <Text style={styles.avatarPrivacyCopy}>La vista previa usa calidad media una sola vez. Después cada outfit reutiliza el avatar confirmado.</Text>
+                  {avatarDisplaySource && <Pressable onPress={deleteAccountAvatar}><Text style={styles.deleteText}>Eliminar avatar actual</Text></Pressable>}
+                </>
+              )}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -1697,6 +2060,7 @@ const styles = StyleSheet.create({
   rustDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: rust },
   avatar: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: ink },
   avatarText: { color: ink, fontSize: 9, fontWeight: "700" },
+  avatarThumb: { width: 28, height: 28, borderRadius: 14 },
   screenContent: { paddingHorizontal: 16, paddingTop: 26, paddingBottom: 110 },
   headingRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 18 },
   eyebrow: { color: rust, fontSize: 8, fontWeight: "700", letterSpacing: 1.45, marginBottom: 7 },
@@ -1767,6 +2131,10 @@ const styles = StyleSheet.create({
   tryOnCanvas: { position: "relative", width: "100%", height: 492, overflow: "hidden", borderWidth: 1, borderColor: line, borderRadius: 20, backgroundColor: "#E9E2D5" },
   tryOnCanvasHalo: { position: "absolute", width: 260, height: 260, borderRadius: 130, left: "50%", top: 84, marginLeft: -130, backgroundColor: "rgba(255,255,255,.48)" },
   tryOnAvatarImage: { position: "absolute", left: 0, right: 0, top: 6, bottom: 4, width: "100%", height: "98%" },
+  avatarPlaceholder: { position: "absolute", left: 34, right: 34, top: 84, bottom: 84, alignItems: "center", justifyContent: "center", borderWidth: 1, borderStyle: "dashed", borderColor: "#B8B0A2", borderRadius: 140, backgroundColor: "rgba(248,245,237,.72)" },
+  avatarPlaceholderIcon: { color: rust, fontSize: 38, fontWeight: "200" },
+  avatarPlaceholderTitle: { color: ink, fontSize: 10, fontWeight: "900", letterSpacing: 1.2, marginTop: 12 },
+  avatarPlaceholderCopy: { color: muted, fontSize: 8, marginTop: 6 },
   bodyDropZone: { position: "absolute", zIndex: 30, alignItems: "center", justifyContent: "center", borderWidth: 2, borderStyle: "dashed", borderColor: "rgba(163,79,49,.55)", borderRadius: 24, backgroundColor: "rgba(163,79,49,.10)" },
   bodyDropZoneReady: { borderColor: "#71826A", borderStyle: "solid", backgroundColor: "rgba(113,130,106,.22)" },
   bodyDropHead: { left: "31%", top: "1%", width: "38%", height: "19%", borderRadius: 60 },
@@ -1836,7 +2204,9 @@ const styles = StyleSheet.create({
   outfitPieceName: { color: ink, fontSize: 9, lineHeight: 14 },
   modalBackdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(22,20,17,.45)" },
   modalSheet: { maxHeight: "92%", paddingHorizontal: 20, paddingTop: 32, paddingBottom: 30, backgroundColor: paper, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
-  profileSheet: { paddingHorizontal: 22, paddingTop: 38, paddingBottom: 42, backgroundColor: paper, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
+  profileSheet: { maxHeight: "92%", paddingHorizontal: 22, paddingTop: 38, paddingBottom: 28, backgroundColor: paper, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
+  avatarSheet: { maxHeight: "94%", overflow: "hidden", backgroundColor: paper, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
+  avatarSheetContent: { paddingHorizontal: 20, paddingTop: 38, paddingBottom: 36 },
   closeButton: { position: "absolute", zIndex: 5, right: 14, top: 12, width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,.65)" },
   closeText: { color: ink, fontSize: 25, fontWeight: "300" },
   scanOrb: { width: 58, height: 58, marginBottom: 20, alignSelf: "center", alignItems: "center", justifyContent: "center", borderRadius: 29, borderWidth: 1, borderColor: line, backgroundColor: "#F8F5ED" },
@@ -1865,7 +2235,9 @@ const styles = StyleSheet.create({
   fullButtonText: { color: paper, fontSize: 10, fontWeight: "800" },
   deleteText: { color: "#8B4733", textAlign: "center", fontSize: 9, paddingTop: 15 },
   profileAvatar: { width: 64, height: 64, marginBottom: 18, alignSelf: "center", alignItems: "center", justifyContent: "center", borderRadius: 32, backgroundColor: ink },
+  profileAvatarImage: { width: 64, height: 64, borderRadius: 32 },
   profileAvatarText: { color: paper, fontSize: 16, fontWeight: "800" },
+  avatarProfileButton: { marginTop: 18, backgroundColor: rust },
   architectureCard: { marginTop: 10, borderTopWidth: 1, borderTopColor: line },
   architectureRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: line },
   architectureLabel: { color: muted, fontSize: 8, fontWeight: "700", letterSpacing: 0.7 },
@@ -1874,6 +2246,28 @@ const styles = StyleSheet.create({
   profileFootnote: { color: muted, textAlign: "center", fontSize: 9, lineHeight: 14, marginTop: 18 },
   experimentalNote: { color: rust, textAlign: "center", fontSize: 7, lineHeight: 12, fontWeight: "800", letterSpacing: 0.45, marginTop: 18, marginBottom: 10 },
   experimentalButton: { marginTop: 0 },
+  avatarDraftFrame: { width: "100%", aspectRatio: 0.72, marginTop: 9, marginBottom: 14, overflow: "hidden", borderRadius: 20, borderWidth: 1, borderColor: line, backgroundColor: "#E9E2D5" },
+  avatarDraftImage: { width: "100%", height: "100%" },
+  avatarConfirmButton: { marginTop: 16, backgroundColor: rust },
+  currentAvatarCard: { flexDirection: "row", alignItems: "center", gap: 14, marginTop: 6, marginBottom: 18, padding: 10, borderWidth: 1, borderColor: line, borderRadius: 15, backgroundColor: "#F8F5ED" },
+  currentAvatarImage: { width: 70, height: 94, borderRadius: 10, backgroundColor: "#E9E2D5" },
+  currentAvatarCopy: { flex: 1 },
+  currentAvatarEyebrow: { color: rust, fontSize: 6, fontWeight: "900", letterSpacing: 1 },
+  currentAvatarTitle: { color: ink, fontSize: 11, lineHeight: 16, fontWeight: "700", marginTop: 5 },
+  avatarReferenceRow: { flexDirection: "row", gap: 9, marginTop: 8 },
+  avatarReferenceCard: { flex: 1, minHeight: 190, overflow: "hidden", borderWidth: 1, borderStyle: "dashed", borderColor: "#B8B0A2", borderRadius: 15, backgroundColor: "#F8F5ED" },
+  avatarReferenceEmpty: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 12 },
+  avatarReferenceNumber: { color: rust, fontSize: 8, fontWeight: "900", letterSpacing: 1 },
+  avatarReferenceTitle: { color: ink, fontSize: 11, fontWeight: "800", textAlign: "center", marginTop: 9 },
+  avatarReferenceHint: { color: muted, fontSize: 7, lineHeight: 11, textAlign: "center", marginTop: 5 },
+  avatarReferenceImage: { width: "100%", height: 161 },
+  avatarReferenceChange: { color: ink, fontSize: 6, fontWeight: "900", letterSpacing: 0.7, textAlign: "center", paddingVertical: 10 },
+  avatarConsentRow: { flexDirection: "row", alignItems: "flex-start", gap: 10, marginTop: 16, padding: 12, borderRadius: 12, backgroundColor: "#F8F5ED" },
+  avatarConsentBox: { width: 21, height: 21, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#A49B8D", borderRadius: 5, backgroundColor: paper },
+  avatarConsentBoxActive: { borderColor: "#71826A", backgroundColor: "#71826A" },
+  avatarConsentCheck: { color: "white", fontSize: 12, fontWeight: "900" },
+  avatarConsentText: { flex: 1, color: muted, fontSize: 8, lineHeight: 13 },
+  avatarPrivacyCopy: { color: muted, fontSize: 7, lineHeight: 11, textAlign: "center", marginTop: 10 },
   detailBackdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(22,20,17,.45)" },
   detailSheet: { maxHeight: "90%", overflow: "hidden", backgroundColor: paper, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
   detailCopy: { padding: 22, paddingBottom: 34 },
@@ -1976,6 +2370,54 @@ async function uploadOutfitRender(session: CloudSession, outfitId: string, base6
   } finally {
     await FileSystem.deleteAsync(localPath, { idempotent: true }).catch(() => undefined);
   }
+}
+
+async function uploadAccountAvatar(session: CloudSession, base64: string) {
+  if (!FileSystem.cacheDirectory) throw new Error("image_cache_unavailable");
+  const localPath = `${FileSystem.cacheDirectory}vesta-avatar-upload-${Date.now()}.png`;
+  await FileSystem.writeAsStringAsync(localPath, base64, { encoding: FileSystem.EncodingType.Base64 });
+  try {
+    const response = await FileSystem.uploadAsync(
+      `${session.apiUrl}/api/v1/avatar`,
+      localPath,
+      {
+        httpMethod: "PUT",
+        uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+        sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
+        headers: {
+          "Content-Type": "image/png",
+          "OAI-Sites-Authorization": `Bearer ${session.dispatchToken}`,
+          "x-vesta-device-token": session.deviceToken,
+        },
+      },
+    );
+    if (response.status < 200 || response.status >= 300) {
+      throw uploadResultError("avatar", response.status, response.body);
+    }
+    const payload = JSON.parse(response.body) as { avatar?: CloudAvatar };
+    if (!payload.avatar) throw new Error("avatar_payload_missing");
+    return payload.avatar;
+  } finally {
+    await FileSystem.deleteAsync(localPath, { idempotent: true }).catch(() => undefined);
+  }
+}
+
+function accountCachePrefix(session: CloudSession) {
+  return session.deviceId.replace(/[^a-z0-9_-]/giu, "_");
+}
+
+function avatarCachePath(session: CloudSession) {
+  return FileSystem.documentDirectory ? `${FileSystem.documentDirectory}vesta-${accountCachePrefix(session)}-avatar.png` : null;
+}
+
+function outfitCachePath(session: CloudSession, outfitId: string) {
+  if (!FileSystem.documentDirectory) return null;
+  const safeOutfitId = outfitId.replace(/[^a-z0-9_-]/giu, "_");
+  return `${FileSystem.documentDirectory}vesta-${accountCachePrefix(session)}-look-${safeOutfitId}.png`;
+}
+
+function outfitIndexCachePath(session: CloudSession) {
+  return FileSystem.documentDirectory ? `${FileSystem.documentDirectory}vesta-${accountCachePrefix(session)}-looks.json` : null;
 }
 
 function categoryForUi(category: string): Exclude<Category, "all"> {

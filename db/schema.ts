@@ -7,6 +7,9 @@ export const users = sqliteTable("users", {
   id: text("id").primaryKey(),
   email: text("email").notNull(),
   displayName: text("display_name").notNull(),
+  avatarKey: text("avatar_key"),
+  avatarVersion: text("avatar_version"),
+  avatarUpdatedAt: text("avatar_updated_at"),
   createdAt: timestamp(),
   updatedAt: timestamp(),
 }, (table) => [uniqueIndex("users_email_unique").on(table.email)]);
@@ -149,6 +152,8 @@ export const outfits = sqliteTable("outfits", {
   occasion: text("occasion").notNull(),
   rationale: text("rationale").notNull(),
   renderKey: text("render_key"),
+  piecesSnapshotJson: text("pieces_snapshot_json"),
+  avatarVersion: text("avatar_version"),
   status: text("status", { enum: ["suggested", "rendering", "ready", "saved", "rejected"] }).notNull().default("suggested"),
   createdAt: timestamp(),
   updatedAt: timestamp(),

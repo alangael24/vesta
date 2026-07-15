@@ -241,6 +241,39 @@ Preserve the person's identity, face, hair, skin tone, body shape and proportion
   return result;
 }
 
+export async function generateExperimentalAvatarImage(
+  selfie: ImagePicker.ImagePickerAsset,
+  fullBody: ImagePicker.ImagePickerAsset,
+) {
+  const [selfieBase64, bodyBase64] = await Promise.all([
+    prepareImage(selfie),
+    prepareImage(fullBody),
+  ]);
+  const prompt = `Create a canonical photorealistic full-body fitting avatar of the same person shown in both reference images.
+Image 1 is the primary facial identity reference. Image 2 is the primary body-shape, height-proportion, limb-proportion, and posture reference.
+
+Preserve the person's recognizable identity, facial geometry, hair, skin tone, body shape, natural proportions, and visible physical characteristics. Do not beautify, slim, enlarge muscles, change age, change ethnicity, or stylize the person. Create a neutral front-facing standing pose with the head level, arms relaxed and slightly separated from the torso, hands visible, legs naturally separated, and both feet fully visible.
+
+Dress the person in unbranded neutral fitting clothes intended to be replaced later: a plain fitted charcoal short-sleeve T-shirt, straight black pants, and simple neutral shoes. Use a perfectly clean warm off-white studio background with soft even lighting. Remove phones, mirrors, furniture, bathroom details, text, logos, jewelry, bags, hats, and unrelated objects. Output one centered vertical full-body portrait only. This is a reusable identity-preserving base for virtual try-on, not a fashion look.`;
+  const response = await codexImageEdit({
+    images: [
+      { image_url: `data:image/jpeg;base64,${selfieBase64}` },
+      { image_url: `data:image/jpeg;base64,${bodyBase64}` },
+    ],
+    prompt,
+    background: "opaque",
+    moderation: "low",
+    model: "gpt-image-2",
+    quality: "medium",
+    size: "1024x1536",
+  });
+  const payload = await response.json() as { data?: Array<{ b64_json?: string }>; error?: { message?: string; code?: string } };
+  if (!response.ok) throw new Error(payload.error?.code || payload.error?.message || `avatar_image_edit_${response.status}`);
+  const result = payload.data?.[0]?.b64_json;
+  if (!result) throw new Error("avatar_image_edit_empty");
+  return result;
+}
+
 function chromaForGarment(color: string) {
   const normalized = color.toLowerCase();
   if (/verde|green|oliva|olive|lima|lime/u.test(normalized)) {

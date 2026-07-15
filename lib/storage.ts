@@ -31,3 +31,7 @@ export function garmentPreviewKey(ownerId: string, garmentId: string) {
 export function outfitRenderKey(ownerId: string, outfitId: string) {
   return `owners/${ownerId}/outfits/${outfitId}/render.png`;
 }
+
+export function ownerAvatarKey(ownerId: string, version: string) {
+  return `owners/${ownerId}/avatar/${version}.png`;
+}

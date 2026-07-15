@@ -225,7 +225,7 @@ export default function Home() {
         </button>
         <div className="top-actions">
           <button className="quiet-button" onClick={() => setShowCloud(true)}>App nativa</button>
-          <button className="avatar-button" onClick={() => setShowCloud(true)} aria-label="Nube privada de Alan">AL</button>
+          <button className="avatar-button" onClick={() => setShowCloud(true)} aria-label="Tu nube privada">YO</button>
         </div>
       </header>
 
@@ -467,7 +467,7 @@ export default function Home() {
               <div><span>Originales</span><strong>R2 privado</strong></div>
               <div><span>PNG y renders</span><strong>R2 privado</strong></div>
               <div><span>Prendas y estados</span><strong>D1 privado</strong></div>
-              <div><span>Acceso</span><strong>Solo Alan</strong></div>
+              <div><span>Acceso</span><strong>Solo tu cuenta</strong></div>
             </div>
             <p className="pairing-note">No necesitas emparejar nada ni copiar enlaces. Cada cuenta queda aislada automáticamente.</p>
           </section>
