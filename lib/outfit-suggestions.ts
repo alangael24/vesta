@@ -15,12 +15,18 @@ export type OutfitSuggestion = {
   signature: string;
 };
 
+export type OutfitStyleReference = {
+  source: "photo" | "saved_look";
+  garments: OutfitSuggestionGarment[];
+};
+
 const occasions = ["Diario", "Fin de semana", "Cena casual", "Trabajo flexible"];
 
 export function suggestOutfits(
   garments: OutfitSuggestionGarment[],
   count = 3,
   existingSignatures = new Set<string>(),
+  styleReferences: OutfitStyleReference[] = [],
 ): OutfitSuggestion[] {
   const tops = garments.filter((item) => item.category === "tops" || item.category === "one_piece");
   const bottoms = garments.filter((item) => item.category === "bottoms");
@@ -55,13 +61,14 @@ export function suggestOutfits(
         const signature = signatureFor(garmentIds);
         if (!existingSignatures.has(signature)) {
           const occasion = occasionFor(selected, combinationIndex);
+          const affinity = personalStyleAffinity(selected, styleReferences);
           candidates.push({
             name: paletteName(top, bottom, layer),
             occasion,
-            rationale: rationaleFor(top, bottom, layer, shoe, occasion),
+            rationale: rationaleFor(top, bottom, layer, shoe, occasion, affinity.matchedSource),
             garmentIds,
             signature,
-            score: baseScore + (layer ? compatibilityScore(layer.color, top.color) : 1) + garmentIds.length / 10,
+            score: baseScore + (layer ? compatibilityScore(layer.color, top.color) : 1) + garmentIds.length / 10 + affinity.score,
           });
         }
         combinationIndex += 1;
@@ -110,9 +117,43 @@ function rationaleFor(
   layer: OutfitSuggestionGarment | undefined,
   shoe: OutfitSuggestionGarment | undefined,
   occasion: string,
+  matchedSource?: OutfitStyleReference["source"],
 ) {
   const pieces = [top.name, layer?.name, bottom.name, shoe?.name].filter(Boolean);
-  return `${pieces.join(", ")}. La paleta mantiene el conjunto equilibrado y fácil de usar para ${occasion.toLowerCase()}.`;
+  const personal = matchedSource === "photo"
+    ? " Retoma una fórmula de color y capas que ya usaste en tus fotos."
+    : matchedSource === "saved_look"
+      ? " Sigue el estilo de los Looks que ya guardaste."
+      : "";
+  return `${pieces.join(", ")}. La paleta mantiene el conjunto equilibrado y fácil de usar para ${occasion.toLowerCase()}.${personal}`;
+}
+
+function personalStyleAffinity(selected: OutfitSuggestionGarment[], references: OutfitStyleReference[]) {
+  let best = { score: 0, matchedSource: undefined as OutfitStyleReference["source"] | undefined };
+  for (const reference of references) {
+    if (reference.garments.length < 2) continue;
+    const referenceSlots = new Set(reference.garments.map(styleSlot));
+    const referenceColors = new Set(reference.garments.map((garment) => colorFamily(garment.color)));
+    const exactIds = new Set(reference.garments.map((garment) => garment.id));
+    const slotMatches = selected.filter((garment) => referenceSlots.has(styleSlot(garment))).length;
+    const colorMatches = selected.filter((garment) => referenceColors.has(colorFamily(garment.color))).length;
+    const exactMatches = selected.filter((garment) => exactIds.has(garment.id)).length;
+    const layeringMatches = Number(
+      reference.garments.some((garment) => styleSlot(garment) === "layer") === selected.some((garment) => styleSlot(garment) === "layer"),
+    );
+    const score = slotMatches * .35 + colorMatches * 1.05 + exactMatches * 1.8 + layeringMatches * .45;
+    if (score > best.score) best = { score, matchedSource: reference.source };
+  }
+  return best;
+}
+
+function styleSlot(item: OutfitSuggestionGarment) {
+  if (item.category === "tops" || item.category === "one_piece") return "top";
+  if (item.category === "bottoms") return "bottom";
+  if (item.category === "layers") return "layer";
+  if (isFootwear(item)) return "footwear";
+  if (isHeadwear(item)) return "headwear";
+  return "accessory";
 }
 
 function occasionFor(items: OutfitSuggestionGarment[], index: number) {

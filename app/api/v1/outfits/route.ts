@@ -1,9 +1,9 @@
 import { and, asc, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { getDb } from "@/db";
-import { garments, outfitItems, outfits, users } from "@/db/schema";
+import { garmentEvidence, garments, outfitItems, outfits, users } from "@/db/schema";
 import { requireDevice } from "@/lib/device-auth";
 import { parsePiecesSnapshot, snapshotGarment } from "@/lib/outfit-snapshot";
-import { signatureFor, suggestOutfits } from "@/lib/outfit-suggestions";
+import { OutfitStyleReference, signatureFor, suggestOutfits } from "@/lib/outfit-suggestions";
 
 export async function GET(request: Request) {
   const identity = await requireDevice(request);
@@ -98,7 +98,23 @@ export async function POST(request: Request) {
     }, { status: 201, headers: privateHeaders() });
   }
 
-  const suggestions = suggestOutfits(wardrobe, count, existingSignatures);
+  const photoEvidenceRows = await db.select({
+    photoId: garmentEvidence.photoId,
+    garmentId: garmentEvidence.garmentId,
+  }).from(garmentEvidence)
+    .innerJoin(garments, eq(garments.id, garmentEvidence.garmentId))
+    .where(eq(garments.ownerId, identity.ownerId));
+  const garmentsByPhoto = new Map<string, string[]>();
+  for (const row of photoEvidenceRows) {
+    const ids = garmentsByPhoto.get(row.photoId) || [];
+    ids.push(row.garmentId);
+    garmentsByPhoto.set(row.photoId, ids);
+  }
+  const styleReferences: OutfitStyleReference[] = [
+    ...Array.from(garmentsByPhoto.values()).map((ids) => ({ source: "photo" as const, garments: ids.map((id) => wardrobeById.get(id)).filter(Boolean) })),
+    ...Array.from(existingByOutfit.values()).map((ids) => ({ source: "saved_look" as const, garments: ids.map((id) => wardrobeById.get(id)).filter(Boolean) })),
+  ].filter((reference) => reference.garments.length >= 2) as OutfitStyleReference[];
+  const suggestions = suggestOutfits(wardrobe, count, existingSignatures, styleReferences);
   if (!suggestions.length) {
     return Response.json({
       error: wardrobe.length < 2 ? "outfit_wardrobe_too_small" : "outfit_combinations_exhausted",

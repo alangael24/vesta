@@ -30,3 +30,19 @@ test("does not repeat saved combinations", () => {
 test("requires at least one top and one bottom", () => {
   assert.deepEqual(suggestOutfits(wardrobe.filter((item) => item.category !== "bottoms"), 3), []);
 });
+
+test("learns from photographed outfits while proposing a new combination", () => {
+  const photographed = [wardrobe.find((item) => item.id === "top-blue")!, wardrobe.find((item) => item.id === "pants-khaki")!];
+  const photographedSignature = signatureFor(photographed.map((item) => item.id));
+  const [suggestion] = suggestOutfits(
+    wardrobe,
+    1,
+    new Set([photographedSignature]),
+    [{ source: "photo", garments: photographed }],
+  );
+
+  assert.ok(suggestion.garmentIds.includes("top-blue"));
+  assert.ok(suggestion.garmentIds.includes("pants-khaki"));
+  assert.notEqual(suggestion.signature, photographedSignature);
+  assert.match(suggestion.rationale, /ya usaste en tus fotos/);
+});
