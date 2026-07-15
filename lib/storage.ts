@@ -20,6 +20,10 @@ export function garmentCutoutKey(ownerId: string, garmentId: string) {
   return `owners/${ownerId}/garments/${garmentId}/cutout.png`;
 }
 
+export function garmentReconstructionKey(ownerId: string, garmentId: string) {
+  return `owners/${ownerId}/garments/${garmentId}/reconstruction-chroma.png`;
+}
+
 export function garmentPreviewKey(ownerId: string, garmentId: string) {
   return `owners/${ownerId}/garments/${garmentId}/evidence.jpg`;
 }

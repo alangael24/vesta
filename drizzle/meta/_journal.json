@@ -15,6 +15,13 @@
       "when": 1784084947033,
       "tag": "0001_strong_franklin_storm",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1784085803798,
+      "tag": "0002_left_brood",
+      "breakpoints": true
     }
   ]
 }

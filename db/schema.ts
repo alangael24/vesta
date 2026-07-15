@@ -74,6 +74,7 @@ export const processingJobs = sqliteTable("processing_jobs", {
   id: text("id").primaryKey(),
   ownerId: text("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   batchId: text("batch_id").notNull().references(() => importBatches.id, { onDelete: "cascade" }),
+  garmentId: text("garment_id"),
   kind: text("kind", { enum: ["inventory", "reconstruct", "remove_background", "deduplicate", "quality_check", "outfits", "try_on"] }).notNull(),
   status: text("status", { enum: ["queued", "running", "waiting_review", "completed", "failed", "cancelled"] }).notNull().default("queued"),
   progress: integer("progress").notNull().default(0),
@@ -88,7 +89,10 @@ export const processingJobs = sqliteTable("processing_jobs", {
   updatedAt: timestamp(),
   startedAt: text("started_at"),
   completedAt: text("completed_at"),
-}, (table) => [index("processing_jobs_batch_status_idx").on(table.batchId, table.status)]);
+}, (table) => [
+  index("processing_jobs_batch_status_idx").on(table.batchId, table.status),
+  index("processing_jobs_garment_idx").on(table.garmentId),
+]);
 
 export const garments = sqliteTable("garments", {
   id: text("id").primaryKey(),
@@ -102,14 +106,27 @@ export const garments = sqliteTable("garments", {
   description: text("description"),
   confidence: integer("confidence"),
   fingerprint: text("fingerprint"),
+  duplicateOfId: text("duplicate_of_id"),
+  dedupConfidence: integer("dedup_confidence"),
+  dedupRationale: text("dedup_rationale"),
   cutoutKey: text("cutout_key"),
   previewKey: text("preview_key"),
+  reconstructionModel: text("reconstruction_model"),
+  reconstructionQuality: text("reconstruction_quality", { enum: ["draft", "final"] }),
+  reconstructionApprovedAt: text("reconstruction_approved_at"),
+  reconstructedAt: text("reconstructed_at"),
+  cutoutWidth: integer("cutout_width"),
+  cutoutHeight: integer("cutout_height"),
+  transparentPixelRatio: integer("transparent_pixel_ratio"),
+  qaStatus: text("qa_status", { enum: ["pending", "pass", "review", "fail"] }),
+  qaJson: text("qa_json"),
   status: text("status", { enum: ["candidate", "reconstructing", "qa", "approved", "held", "duplicate", "rejected"] }).notNull().default("candidate"),
   createdAt: timestamp(),
   updatedAt: timestamp(),
 }, (table) => [
   index("garments_owner_status_idx").on(table.ownerId, table.status),
   index("garments_fingerprint_idx").on(table.ownerId, table.fingerprint),
+  index("garments_duplicate_idx").on(table.ownerId, table.duplicateOfId),
 ]);
 
 export const garmentEvidence = sqliteTable("garment_evidence", {

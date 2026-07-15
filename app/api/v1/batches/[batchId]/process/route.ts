@@ -2,6 +2,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
 import { importBatches, processingJobs, sourcePhotos } from "@/db/schema";
 import { requireDevice } from "@/lib/device-auth";
+import { runDeduplication } from "@/lib/deduplication";
 import { InventoryError, runInventory } from "@/lib/inventory";
 import { getOpenAIKey } from "@/lib/openai";
 
@@ -21,7 +22,7 @@ export async function GET(request: Request, context: RouteContext) {
     configured: Boolean(getOpenAIKey()),
     batchStatus: batch.status,
     modes: [
-      { id: "economy", label: "Económico", model: "gpt-4o-mini", detail: "high" },
+      { id: "economy", label: "Económico", model: "gpt-5.6-luna", detail: "high" },
       { id: "quality", label: "Máxima precisión", model: "gpt-5.6", detail: "original" },
     ],
     privacy: {
@@ -67,7 +68,7 @@ export async function POST(request: Request, context: RouteContext) {
   }
 
   const now = new Date().toISOString();
-  const model = mode === "quality" ? "gpt-5.6" : "gpt-4o-mini";
+  const model = mode === "quality" ? "gpt-5.6" : "gpt-5.6-luna";
   await db.batch([
     db.update(importBatches).set({ status: "processing", processingMode: mode, processingApprovedAt: now, updatedAt: now }).where(eq(importBatches.id, batchId)),
     db.update(processingJobs).set({ status: "running", progress: 5, attempts: job.attempts + 1, model, errorCode: null, errorMessage: null, startedAt: now, updatedAt: now }).where(eq(processingJobs.id, job.id)),
@@ -81,13 +82,55 @@ export async function POST(request: Request, context: RouteContext) {
     ));
     if (photos.length !== batch.photoCount) throw new InventoryError("photos_incomplete", "Not all source photos are available.");
     const result = await runInventory(identity.ownerId, batchId, photos, mode);
+    const dedupJobId = `job_${batchId}_deduplicate`;
+    const dedupStartedAt = new Date().toISOString();
+    await db.insert(processingJobs).values({
+      id: dedupJobId,
+      ownerId: identity.ownerId,
+      batchId,
+      kind: "deduplicate",
+      status: "running",
+      progress: 10,
+      attempts: 1,
+      model,
+      createdAt: dedupStartedAt,
+      updatedAt: dedupStartedAt,
+      startedAt: dedupStartedAt,
+    }).onConflictDoUpdate({
+      target: processingJobs.id,
+      set: { status: "running", progress: 10, attempts: 1, model, errorCode: null, errorMessage: null, startedAt: dedupStartedAt, updatedAt: dedupStartedAt },
+    });
+    let deduplication: Awaited<ReturnType<typeof runDeduplication>> | null = null;
+    let deduplicationError: string | null = null;
+    try {
+      deduplication = await runDeduplication(identity.ownerId, batchId, mode);
+      const dedupCompletedAt = new Date().toISOString();
+      await db.update(processingJobs).set({
+        status: "completed",
+        progress: 100,
+        resultJson: JSON.stringify(deduplication),
+        inputTokens: deduplication.inputTokens,
+        outputTokens: deduplication.outputTokens,
+        completedAt: dedupCompletedAt,
+        updatedAt: dedupCompletedAt,
+      }).where(eq(processingJobs.id, dedupJobId));
+    } catch (error) {
+      deduplicationError = error instanceof InventoryError ? error.code : "deduplication_failed";
+      const dedupFailedAt = new Date().toISOString();
+      await db.update(processingJobs).set({
+        status: "failed",
+        errorCode: deduplicationError,
+        errorMessage: error instanceof Error ? error.message.slice(0, 1000) : "Deduplication failed.",
+        updatedAt: dedupFailedAt,
+      }).where(eq(processingJobs.id, dedupJobId));
+    }
     const completedAt = new Date().toISOString();
     await db.batch([
       db.update(processingJobs).set({
         status: "completed",
         progress: 100,
         model: result.model,
-        resultJson: JSON.stringify({ garmentCount: result.garmentCount, chunks: result.rawResults.length }),
+        resultJson: JSON.stringify({ garmentCount: result.garmentCount, chunks: result.rawResults.length, duplicateCount: deduplication?.duplicateCount ?? 0, deduplicationError }),
         inputTokens: result.inputTokens,
         outputTokens: result.outputTokens,
         completedAt,
@@ -95,7 +138,15 @@ export async function POST(request: Request, context: RouteContext) {
       }).where(eq(processingJobs.id, job.id)),
       db.update(importBatches).set({ status: "review", updatedAt: completedAt }).where(eq(importBatches.id, batchId)),
     ]);
-    return Response.json({ ok: true, status: "review", garmentCount: result.garmentCount, inputTokens: result.inputTokens, outputTokens: result.outputTokens });
+    return Response.json({
+      ok: true,
+      status: "review",
+      garmentCount: result.garmentCount,
+      duplicateCount: deduplication?.duplicateCount ?? 0,
+      deduplicationStatus: deduplicationError ? "failed" : "completed",
+      inputTokens: result.inputTokens + (deduplication?.inputTokens ?? 0),
+      outputTokens: result.outputTokens + (deduplication?.outputTokens ?? 0),
+    });
   } catch (error) {
     const failedAt = new Date().toISOString();
     const code = error instanceof InventoryError ? error.code : "inventory_failed";
@@ -119,4 +170,3 @@ function parseGarmentCount(value: string | null) {
 async function safeJson(request: Request): Promise<{ mode?: string; consent?: boolean; acknowledgesOpenAIRetention?: boolean } | null> {
   try { return await request.json() as { mode?: string; consent?: boolean; acknowledgesOpenAIRetention?: boolean }; } catch { return null; }
 }
-

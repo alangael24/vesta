@@ -36,6 +36,10 @@ type WardrobeItem = {
   description?: string;
   confidence?: number | null;
   status?: string;
+  reconstructionQuality?: "draft" | "final" | null;
+  transparentPixelRatio?: number | null;
+  qaStatus?: "pending" | "pass" | "review" | "fail" | null;
+  qaSummary?: { summary?: string | null; issues?: string[] };
   imagePath?: string | null;
   imageKind?: "cutout" | "evidence";
   spriteIndex?: number;
@@ -65,6 +69,10 @@ type CloudGarment = {
   description?: string;
   confidence?: number | null;
   status?: string;
+  reconstructionQuality?: "draft" | "final" | null;
+  transparentPixelRatio?: number | null;
+  qaStatus?: "pending" | "pass" | "review" | "fail" | null;
+  qaSummary?: { summary?: string | null; issues?: string[] };
   imagePath?: string | null;
   imageKind?: "cutout" | "evidence";
 };
@@ -188,7 +196,9 @@ export default function App() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [processing, setProcessing] = useState(false);
+  const [reconstructingId, setReconstructingId] = useState<ItemId | null>(null);
   const [cloudWardrobe, setCloudWardrobe] = useState<WardrobeItem[]>([]);
+  const [duplicateCount, setDuplicateCount] = useState(0);
   const [wardrobeLoading, setWardrobeLoading] = useState(false);
   const [builderItems, setBuilderItems] = useState<ItemId[]>([2, 9]);
   const [occasion, setOccasion] = useState("Diario");
@@ -288,11 +298,14 @@ export default function App() {
     try {
       const response = await cloudFetch(session, "/api/v1/wardrobe", { method: "GET" });
       if (!response.ok) return;
-      const result = await response.json() as { garments: CloudGarment[] };
-      setCloudWardrobe(result.garments.map((item) => ({
+      const result = await response.json() as { garments: CloudGarment[]; duplicateCount?: number };
+      const items = result.garments.map((item) => ({
         ...item,
         category: categoryForUi(item.category),
-      })));
+      }));
+      setCloudWardrobe(items);
+      setDuplicateCount(result.duplicateCount ?? 0);
+      return items;
     } finally {
       setWardrobeLoading(false);
     }
@@ -413,18 +426,67 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode, consent: true, acknowledgesOpenAIRetention: true }),
       });
-      const result = await response.json() as { error?: string; garmentCount?: number };
+      const result = await response.json() as { error?: string; garmentCount?: number; duplicateCount?: number; deduplicationStatus?: string };
       if (response.status === 503 && result.error === "processing_not_configured") {
         Alert.alert("Fotos seguras; análisis pendiente", "El motor privado de IA todavía necesita su clave de procesamiento. Tus fotos quedaron guardadas y no se enviaron a OpenAI.");
         return;
       }
       if (!response.ok) throw new Error(result.error || "processing_failed");
       await loadWardrobe(cloudSession);
-      Alert.alert("Inventario listo para revisar", `Vesta detectó ${result.garmentCount ?? 0} candidatos de prendas. Las dudosas quedaron marcadas y los posibles duplicados se revisarán antes de aprobarlos.`);
+      const dedupCopy = result.deduplicationStatus === "failed" ? "La revisión de duplicados queda pendiente." : `${result.duplicateCount ?? 0} duplicados de alta confianza quedaron apartados.`;
+      Alert.alert("Inventario listo para revisar", `Vesta detectó ${result.garmentCount ?? 0} candidatos de prendas. ${dedupCopy}`);
     } catch {
       Alert.alert("El análisis no terminó", "Tus originales siguen seguros en la nube. Podremos reintentar el inventario sin volver a subirlos.");
     } finally {
       setProcessing(false);
+    }
+  };
+
+  const chooseReconstruction = (item: WardrobeItem) => {
+    const heldNote = item.status === "held" ? " La evidencia es débil; si continúas, el resultado quedará obligado a revisión." : "";
+    Alert.alert(
+      "Crear PNG transparente",
+      `Esta operación reconstruye una sola prenda con GPT Image 2 y después verifica el resultado contra tus fotos.${heldNote}`,
+      [
+        { text: "Ahora no", style: "cancel" },
+        { text: "Borrador económico", onPress: () => startReconstruction(item, "draft") },
+        { text: "Calidad final", onPress: () => startReconstruction(item, "final") },
+      ],
+    );
+  };
+
+  const startReconstruction = async (item: WardrobeItem, mode: "draft" | "final") => {
+    if (!cloudSession || reconstructingId) return;
+    setReconstructingId(item.id);
+    try {
+      const response = await cloudFetch(cloudSession, `/api/v1/garments/${item.id}/reconstruct`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode,
+          consent: true,
+          acknowledgesOpenAIRetention: true,
+          forceHeld: item.status === "held",
+        }),
+      });
+      const result = await response.json() as { error?: string; status?: string; qaStatus?: string };
+      if (response.status === 503 && result.error === "processing_not_configured") {
+        Alert.alert("PNG pendiente", "La clave de procesamiento todavía no está conectada. No se generó ningún cargo ni se enviaron imágenes.");
+        return;
+      }
+      if (!response.ok) throw new Error(result.error || "reconstruction_failed");
+      const items = await loadWardrobe(cloudSession);
+      const refreshed = items?.find((entry) => entry.id === item.id);
+      if (refreshed) setSelectedItem(refreshed);
+      if (result.status === "approved") {
+        Alert.alert("PNG verificado", "La reconstrucción pasó las comprobaciones técnicas y visuales.");
+      } else {
+        Alert.alert("Necesita revisión", "Vesta conservó la evidencia y marcó el resultado para revisión en lugar de aprobarlo automáticamente.");
+      }
+    } catch {
+      Alert.alert("No se creó el PNG", "La prenda y sus fotos siguen intactas. Puedes reintentar sin volver a subirlas.");
+    } finally {
+      setReconstructingId(null);
     }
   };
 
@@ -447,7 +509,7 @@ export default function App() {
           </Pressable>
           <View style={styles.cloudBadge}>
             <View style={cloudSession ? styles.greenDot : styles.rustDot} />
-            <Text style={[styles.cloudBadgeText, !cloudSession && styles.cloudBadgePending]}>{processing ? "ANALIZANDO…" : cloudSession ? "NUBE CONECTADA" : "NUBE POR EMPAREJAR"}</Text>
+            <Text style={[styles.cloudBadgeText, !cloudSession && styles.cloudBadgePending]}>{processing ? "ANALIZANDO…" : reconstructingId ? "CREANDO PNG…" : cloudSession ? "NUBE CONECTADA" : "NUBE POR EMPAREJAR"}</Text>
           </View>
           <Pressable style={styles.avatar} onPress={() => setProfileOpen(true)} accessibilityLabel="Privacidad y perfil">
             <Text style={styles.avatarText}>AL</Text>
@@ -496,7 +558,7 @@ export default function App() {
                 <GarmentVisual item={item} session={cloudSession} />
                 <View style={styles.cardCopy}>
                   <Text style={styles.cardTitle}>{item.name}</Text>
-                  <Text style={styles.cardMeta}>{item.type} · {item.color}{item.status === "held" ? " · revisar" : ""}</Text>
+                  <Text style={styles.cardMeta}>{item.type} · {item.color} · {statusLabel(item.status)}</Text>
                 </View>
                 {builderItems.includes(item.id) && <View style={styles.selectedDot}><Text style={styles.selectedDotText}>✓</Text></View>}
               </Pressable>
@@ -637,6 +699,7 @@ export default function App() {
             <View style={styles.architectureCard}>
               <View style={styles.architectureRow}><Text style={styles.architectureLabel}>ORIGINALES</Text><Text style={styles.architectureValue}>Privados</Text></View>
               <View style={styles.architectureRow}><Text style={styles.architectureLabel}>PNG Y RENDERS</Text><Text style={styles.architectureValue}>Privados</Text></View>
+              <View style={styles.architectureRow}><Text style={styles.architectureLabel}>DUPLICADOS APARTADOS</Text><Text style={styles.architectureValue}>{duplicateCount}</Text></View>
               <View style={styles.architectureRow}><Text style={styles.architectureLabel}>ACCESO</Text><Text style={styles.architectureValue}>Solo Alan</Text></View>
               <View style={styles.architectureRow}><Text style={styles.architectureLabel}>ESTADO</Text><Text style={cloudSession ? styles.architectureValue : styles.architecturePending}>{cloudSession ? "Conectada" : pairing ? "Emparejando…" : "Por conectar"}</Text></View>
             </View>
@@ -658,6 +721,12 @@ export default function App() {
                 <Text style={styles.eyebrow}>{selectedItem.type.toUpperCase()}</Text>
                 <Text style={styles.detailTitle}>{selectedItem.name}</Text>
                 <Text style={styles.detailIntro}>{selectedItem.description || (selectedItem.imagePath ? `Detectada con ${selectedItem.confidence ?? 0}% de confianza. La vista actual muestra la foto de evidencia hasta generar el recorte transparente.` : "Muestra visual del armario. Esta ficha será reemplazada por la prenda extraída de tus fotos.")}</Text>
+                {selectedItem.qaSummary?.summary && <Text style={styles.qaSummary}>{selectedItem.qaSummary.summary}</Text>}
+                {selectedItem.imagePath && (
+                  <Pressable style={[styles.fullButton, styles.reconstructAction, reconstructingId === selectedItem.id && styles.disabledButton]} onPress={() => chooseReconstruction(selectedItem)} disabled={reconstructingId === selectedItem.id}>
+                    <Text style={styles.fullButtonText}>{reconstructingId === selectedItem.id ? "Creando y verificando…" : selectedItem.status === "approved" ? "Regenerar PNG" : "Crear PNG transparente"}</Text>
+                  </Pressable>
+                )}
                 <Pressable style={styles.fullButton} onPress={() => toggleBuilderItem(selectedItem.id)}>
                   <Text style={styles.fullButtonText}>{builderItems.includes(selectedItem.id) ? "✓ En el creador" : "＋ Usar en un look"}</Text>
                 </Pressable>
@@ -792,6 +861,7 @@ const styles = StyleSheet.create({
   fullButton: { width: "100%", alignItems: "center", backgroundColor: ink, paddingVertical: 15 },
   secondaryButton: { width: "100%", alignItems: "center", marginTop: 14, borderWidth: 1, borderColor: ink, paddingVertical: 13 },
   secondaryButtonText: { color: ink, fontSize: 9, fontWeight: "800" },
+  reconstructAction: { marginBottom: 8, backgroundColor: rust },
   disabledButton: { opacity: 0.6 },
   fullButtonText: { color: paper, fontSize: 10, fontWeight: "800" },
   deleteText: { color: "#8B4733", textAlign: "center", fontSize: 9, paddingTop: 15 },
@@ -808,6 +878,7 @@ const styles = StyleSheet.create({
   detailCopy: { padding: 22, paddingBottom: 34 },
   detailTitle: { color: ink, fontSize: 34, lineHeight: 37, letterSpacing: -1.2, fontFamily: Platform.select({ ios: "Georgia", android: "serif" }) },
   detailIntro: { color: muted, fontSize: 10, lineHeight: 16, marginTop: 12, marginBottom: 20 },
+  qaSummary: { color: rust, fontSize: 9, lineHeight: 14, marginTop: -8, marginBottom: 18 },
 });
 
 function cloudFetch(session: CloudSession, path: string, init: RequestInit) {
@@ -832,6 +903,14 @@ function categoryForUi(category: string): Exclude<Category, "all"> {
   if (category === "footwear") return "accessories";
   if (category === "one_piece") return "layers";
   return "accessories";
+}
+
+function statusLabel(status?: string) {
+  if (status === "approved") return "verificada";
+  if (status === "qa") return "revisar PNG";
+  if (status === "held") return "evidencia débil";
+  if (status === "reconstructing") return "procesando";
+  return "por reconstruir";
 }
 
 function mimeTypeFor(photo: ImagePicker.ImagePickerAsset) {

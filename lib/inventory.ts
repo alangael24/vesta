@@ -1,11 +1,11 @@
 import { and, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { garmentEvidence, garments, sourcePhotos } from "@/db/schema";
-import { getImagesBinding, getOpenAIKey } from "@/lib/openai";
+import { arrayBufferToBase64, extractOutputText, getImagesBinding, getOpenAIKey, OpenAIResponse } from "@/lib/openai";
 import { garmentPreviewKey, getMediaBucket, normalizedPhotoKey } from "@/lib/storage";
 
 type SourcePhoto = typeof sourcePhotos.$inferSelect;
-type ProcessingMode = "economy" | "quality";
+export type ProcessingMode = "economy" | "quality";
 
 type InventoryCandidate = {
   candidate_key: string;
@@ -94,7 +94,7 @@ export async function runInventory(ownerId: string, batchId: string, photos: Sou
   const apiKey = getOpenAIKey();
   if (!apiKey) throw new InventoryError("processing_not_configured", "OpenAI processing is not configured.");
 
-  const model = mode === "quality" ? "gpt-5.6" : "gpt-4o-mini";
+  const model = mode === "quality" ? "gpt-5.6" : "gpt-5.6-luna";
   const detail = mode === "quality" ? "original" : "high";
   const chunks = chunk(photos, 4);
   const rawResults: InventoryResult[] = [];
@@ -239,26 +239,6 @@ function fingerprintFor(candidate: InventoryCandidate) {
     .join("|");
 }
 
-function extractOutputText(payload: OpenAIResponse) {
-  for (const output of payload.output ?? []) {
-    if (output.type !== "message") continue;
-    for (const content of output.content ?? []) {
-      if (content.type === "output_text" && content.text) return content.text;
-      if (content.type === "refusal") throw new InventoryError("openai_refusal", content.refusal || "The inventory request was refused.");
-    }
-  }
-  return null;
-}
-
-function arrayBufferToBase64(buffer: ArrayBuffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
-  }
-  return btoa(binary);
-}
-
 function chunk<T>(items: T[], size: number) {
   const chunks: T[][] = [];
   for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
@@ -268,12 +248,6 @@ function chunk<T>(items: T[], size: number) {
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.max(minimum, Math.min(maximum, Math.round(value)));
 }
-
-type OpenAIResponse = {
-  output?: Array<{ type: string; content?: Array<{ type: string; text?: string; refusal?: string }> }>;
-  usage?: { input_tokens?: number; output_tokens?: number };
-  error?: { message?: string };
-};
 
 export class InventoryError extends Error {
   constructor(public readonly code: string, message: string) {
