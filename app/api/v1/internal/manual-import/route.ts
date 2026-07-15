@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
-import { importBatches, processingJobs, sourcePhotos, users } from "@/db/schema";
+import { garments, importBatches, processingJobs, sourcePhotos, users } from "@/db/schema";
 import { InventoryCandidate, persistExperimentalInventory } from "@/lib/inventory";
 import { getMediaBucket } from "@/lib/storage";
 import { originalPhotoKey } from "@/lib/storage";
@@ -19,6 +19,11 @@ type ManualCandidate = Omit<InventoryCandidate, "evidence"> & {
 
 type ManualInventory = {
   garments?: ManualCandidate[];
+};
+
+type ManualDeletePayload = {
+  email?: string;
+  garmentIds?: string[];
 };
 
 export async function PUT(request: Request) {
@@ -134,6 +139,40 @@ export async function PUT(request: Request) {
   }
 }
 
+export async function DELETE(request: Request) {
+  if (!authorized(request)) return notFound();
+
+  const payload = await safeJson(request);
+  const email = payload?.email?.trim().toLowerCase();
+  const garmentIds = Array.from(new Set(payload?.garmentIds?.filter((value) => typeof value === "string") || [])).slice(0, 100);
+  if (!email || !garmentIds.length) {
+    return Response.json({ error: "invalid_manual_delete" }, { status: 400 });
+  }
+
+  const db = getDb();
+  const [owner] = await db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
+  if (!owner) return Response.json({ error: "owner_not_found" }, { status: 404 });
+
+  const rows = await db.select({
+    id: garments.id,
+    cutoutKey: garments.cutoutKey,
+    previewKey: garments.previewKey,
+  }).from(garments).where(and(
+    eq(garments.ownerId, owner.id),
+    inArray(garments.id, garmentIds),
+  ));
+  if (!rows.length) {
+    return Response.json({ ok: true, deletedCount: 0 }, { headers: { "Cache-Control": "no-store" } });
+  }
+  const objectKeys = rows.flatMap((row) => [row.cutoutKey, row.previewKey]).filter((value): value is string => Boolean(value));
+  await Promise.all(objectKeys.map((key) => getMediaBucket().delete(key)));
+  await db.delete(garments).where(and(
+    eq(garments.ownerId, owner.id),
+    inArray(garments.id, rows.map((row) => row.id)),
+  ));
+  return Response.json({ ok: true, deletedCount: rows.length }, { headers: { "Cache-Control": "no-store" } });
+}
+
 function authorized(request: Request) {
   const configured = (env as unknown as RuntimeEnv).VESTA_MANUAL_IMPORT_SECRET?.trim();
   const supplied = request.headers.get("x-vesta-manual-secret")?.trim();
@@ -148,6 +187,14 @@ function parseInventory(value: FormDataEntryValue | null): ManualInventory | nul
   if (typeof value !== "string") return null;
   try {
     return JSON.parse(value) as ManualInventory;
+  } catch {
+    return null;
+  }
+}
+
+async function safeJson(request: Request): Promise<ManualDeletePayload | null> {
+  try {
+    return await request.json() as ManualDeletePayload;
   } catch {
     return null;
   }
