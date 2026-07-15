@@ -1,6 +1,7 @@
 import { StatusBar } from "expo-status-bar";
 import * as Clipboard from "expo-clipboard";
 import * as Device from "expo-device";
+import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import * as SecureStore from "expo-secure-store";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -412,15 +413,23 @@ export default function App() {
       const batch = await batchResponse.json() as { batchId: string; photos: Array<{ id: string; uploadPath: string }> };
 
       for (let index = 0; index < photos.length; index += 1) {
-        const fileResponse = await fetch(photos[index].uri);
-        if (!fileResponse.ok) throw new Error(`local_photo_${index + 1}_${fileResponse.status}`);
-        const blob = await fileResponse.blob();
-        const uploadResponse = await cloudFetch(cloudSession, batch.photos[index].uploadPath, {
-          method: "PUT",
-          headers: { "Content-Type": manifest[index].contentType },
-          body: blob,
-        });
-        if (!uploadResponse.ok) throw await uploadError(`photo_${index + 1}`, uploadResponse);
+        const uploadResponse = await FileSystem.uploadAsync(
+          `${cloudSession.apiUrl}${batch.photos[index].uploadPath}`,
+          photos[index].uri,
+          {
+            httpMethod: "PUT",
+            uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+            sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
+            headers: {
+              "Content-Type": manifest[index].contentType,
+              "OAI-Sites-Authorization": `Bearer ${cloudSession.dispatchToken}`,
+              "x-vesta-device-token": cloudSession.deviceToken,
+            },
+          },
+        );
+        if (uploadResponse.status < 200 || uploadResponse.status >= 300) {
+          throw uploadResultError(`photo_${index + 1}`, uploadResponse.status, uploadResponse.body);
+        }
         setUploadProgress(Math.round(((index + 1) / photos.length) * 100));
       }
 
@@ -1010,6 +1019,17 @@ async function uploadError(stage: string, response: Response) {
     // The status and stage still identify the failed request.
   }
   return new Error(`${stage}_${response.status}_${serverCode}`);
+}
+
+function uploadResultError(stage: string, status: number, body: string) {
+  let serverCode = "unknown";
+  try {
+    const payload = JSON.parse(body) as { error?: string };
+    if (payload.error) serverCode = payload.error;
+  } catch {
+    // The status and stage still identify the failed request.
+  }
+  return new Error(`${stage}_${status}_${serverCode}`);
 }
 
 function authorizedImageSource(session: CloudSession, path: string) {
