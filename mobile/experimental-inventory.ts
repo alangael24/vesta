@@ -216,7 +216,7 @@ export async function generateExperimentalTryOnImage(
     `Image ${index + 2}: ${garment.name}; placement=${garment.placement}; type=${garment.type}; color=${garment.color}; details=${garment.description || "preserve only visible details"}.`
   )).join("\n");
   const prompt = `Use case: identity-preserve virtual try-on.
-Image 1 is the exact base avatar and must remain the same person. Images 2 onward are isolated reference garments.
+Image 1 is the exact base avatar and must remain the same person. Images 2 onward are garment references from the private wardrobe or a public retailer product page. A retailer reference may include a plain catalog background or a model; use only the specifically described product and ignore every other garment, person, prop, text, and background in that reference.
 ${garmentList}
 
 Create one photorealistic full-body fashion fitting image in which the person from Image 1 is actually wearing every referenced garment in its specified anatomical placement. This must be a genuine image edit, not a collage or overlay: make fabric wrap around the body, follow the shoulders, chest, waist, hips, legs, head, or feet as appropriate, with realistic drape, folds, seams, sleeve openings, occlusion, scale, perspective, and contact shadows. Replace the neutral base clothing only where a selected garment belongs; keep neutral base clothing in unselected body regions.

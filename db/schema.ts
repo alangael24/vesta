@@ -107,6 +107,8 @@ export const garments = sqliteTable("garments", {
   color: text("color"),
   material: text("material"),
   description: text("description"),
+  sourceType: text("source_type", { enum: ["photos", "internet"] }).notNull().default("photos"),
+  sourceUrl: text("source_url"),
   confidence: integer("confidence"),
   isBasic: integer("is_basic", { mode: "boolean" }).notNull().default(false),
   fingerprint: text("fingerprint"),

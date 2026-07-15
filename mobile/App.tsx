@@ -21,6 +21,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import {
@@ -51,6 +52,8 @@ type WardrobeItem = {
   color: string;
   material?: string;
   description?: string;
+  sourceType?: "photos" | "internet";
+  sourceUrl?: string | null;
   confidence?: number | null;
   isBasic?: boolean;
   status?: string;
@@ -82,6 +85,7 @@ type TryOnLayer = {
 };
 
 type TryOnRenderQuality = "low" | "medium";
+type ProductPlacementHint = "auto" | "head" | "top" | "outer" | "legs" | "feet";
 
 type BodyRegion = "head" | "torso" | "legs" | "feet";
 type FittingSlot = "head" | "top" | "outer" | "legs" | "feet" | "accessory";
@@ -103,6 +107,8 @@ type CloudGarment = {
   color: string;
   material?: string;
   description?: string;
+  sourceType?: "photos" | "internet";
+  sourceUrl?: string | null;
   confidence?: number | null;
   isBasic?: boolean;
   status?: string;
@@ -154,6 +160,15 @@ const filters: { id: Category; label: string }[] = [
   { id: "accessories", label: "Accesorios" },
 ];
 
+const productPlacements: Array<{ id: ProductPlacementHint; label: string }> = [
+  { id: "auto", label: "Auto" },
+  { id: "head", label: "Cabeza" },
+  { id: "top", label: "Arriba" },
+  { id: "outer", label: "Capa" },
+  { id: "legs", label: "Piernas" },
+  { id: "feet", label: "Pies" },
+];
+
 function Sprite({
   source,
   index,
@@ -197,6 +212,7 @@ function GarmentVisual({ item, session }: { item: WardrobeItem; session: CloudSe
       <View style={[styles.spriteFrame, { aspectRatio: 1 }]}>
         <Image source={authorizedImageSource(session, item.imagePath)} resizeMode={item.imageKind === "cutout" ? "contain" : "cover"} style={styles.cloudGarmentImage} />
         {item.imageKind === "evidence" && <View style={styles.evidenceBadge}><Text style={styles.evidenceBadgeText}>EVIDENCIA</Text></View>}
+        {item.sourceType === "internet" && <View style={styles.internetBadge}><Text style={styles.internetBadgeText}>WEB</Text></View>}
       </View>
     );
   }
@@ -322,10 +338,23 @@ function formatBytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function productImportErrorMessage(code: string) {
+  if (/invalid_url|unsafe_url/u.test(code)) return "El enlace no es una página pública válida. Revisa que empiece con https://.";
+  if (/product_page_blocked/u.test(code)) return "Esa tienda bloqueó la lectura automática. Prueba con el enlace directo de la imagen del producto.";
+  if (/product_image_missing/u.test(code)) return "La página no indicó cuál es la foto principal. Prueba con el enlace directo de la imagen.";
+  if (/too_large/u.test(code)) return "La página o imagen es demasiado grande para importarla de forma segura.";
+  if (/product_unreachable|redirect/u.test(code)) return "La tienda no respondió correctamente. Comprueba el enlace o inténtalo otra vez.";
+  return "No logramos extraer una imagen de producto utilizable. La tienda y tu armario no fueron modificados.";
+}
+
 export default function App() {
   const [view, setView] = useState<ViewName>("closet");
   const [filter, setFilter] = useState<Category>("all");
   const [importOpen, setImportOpen] = useState(false);
+  const [linkImportOpen, setLinkImportOpen] = useState(false);
+  const [productUrl, setProductUrl] = useState("");
+  const [productPlacement, setProductPlacement] = useState<ProductPlacementHint>("auto");
+  const [productImporting, setProductImporting] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
   const [avatarSelfie, setAvatarSelfie] = useState<ImagePicker.ImagePickerAsset | null>(null);
@@ -1027,6 +1056,70 @@ export default function App() {
     );
   };
 
+  const pasteProductUrl = async () => {
+    const value = (await Clipboard.getStringAsync()).trim();
+    if (!value) {
+      Alert.alert("No hay un enlace copiado", "Copia primero la página del producto y vuelve a intentarlo.");
+      return;
+    }
+    setProductUrl(value);
+  };
+
+  const importProductFromUrl = async () => {
+    if (productImporting) return;
+    if (!cloudSession) {
+      Alert.alert("Preparando tu cuenta", "Vesta necesita terminar la conexión privada antes de importar esta prenda.");
+      return;
+    }
+    if (!productUrl.trim()) {
+      Alert.alert("Pega el enlace del producto", "Puede ser una gorra, playera, chamarra, pantalón o calzado de cualquier tienda pública.");
+      return;
+    }
+    setProductImporting(true);
+    try {
+      const response = await cloudFetch(cloudSession, "/api/v1/garments/from-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: productUrl.trim(), placement: productPlacement }),
+      });
+      const payload = await response.json() as { error?: string; garment?: CloudGarment };
+      if (!response.ok || !payload.garment) throw new Error(payload.error || "product_import_failed");
+      const item: WardrobeItem = { ...payload.garment, category: categoryForUi(payload.garment.category) };
+      setCloudWardrobe((current) => [item, ...current.filter((entry) => entry.id !== item.id)]);
+      const previousLayers = tryOnLayers;
+      const fittingSlot = fittingSlotFor(item);
+      const nextLayers = [
+        ...previousLayers.filter((layer) => layer.item.id !== item.id && (fittingSlot === "accessory" || fittingSlotFor(layer.item) !== fittingSlot)),
+        { key: `${item.id}-web-${Date.now()}`, item },
+      ];
+      setTryOnLayers(nextLayers);
+      setSelectedItem(null);
+      setLinkImportOpen(false);
+      setProductUrl("");
+      setProductPlacement("auto");
+      setView("builder");
+
+      if (!localAvatarUri && !cloudAvatar) {
+        Alert.alert("Prenda guardada", "Ya está en tu armario. Crea tu avatar para verla puesta.", [
+          { text: "Después", style: "cancel" },
+          { text: "Crear avatar", onPress: () => setAvatarOpen(true) },
+        ]);
+      } else if (!codexConnected) {
+        Alert.alert("Prenda lista para probar", "La importamos y la añadimos al outfit. Conecta ChatGPT para generar cómo se te ve.", [
+          { text: "Después", style: "cancel" },
+          { text: "Conectar", onPress: connectCodexExperiment },
+        ]);
+      } else {
+        renderRealTryOn(nextLayers, nextLayers, "low").catch(() => undefined);
+      }
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "product_import_failed";
+      Alert.alert("No pudimos leer esa prenda", productImportErrorMessage(code));
+    } finally {
+      setProductImporting(false);
+    }
+  };
+
   const prepareBatch = () => {
     setBatchReady(true);
     setImportOpen(false);
@@ -1652,7 +1745,7 @@ export default function App() {
             ListEmptyComponent={
               <View style={styles.emptyCollection}>
                 <Text style={styles.emptyCollectionTitle}>Todavía no hay prendas.</Text>
-                <Text style={styles.emptyCollectionCopy}>Importa fotos para que Luna construya tu armario real.</Text>
+                <Text style={styles.emptyCollectionCopy}>Importa fotos tuyas o pega el enlace de cualquier prenda que quieras probar.</Text>
               </View>
             }
             renderItem={({ item }) => (
@@ -1682,6 +1775,19 @@ export default function App() {
                 </Pressable>
               )}
             </View>
+
+            <Pressable
+              style={[styles.webTryOnBanner, tryOnRendering && styles.disabledButton]}
+              onPress={() => setLinkImportOpen(true)}
+              disabled={tryOnRendering}
+            >
+              <View style={styles.webTryOnIcon}><Text style={styles.webTryOnIconText}>↗</Text></View>
+              <View style={styles.webTryOnCopy}>
+                <Text style={styles.webTryOnEyebrow}>¿VISTE ALGO EN INTERNET?</Text>
+                <Text style={styles.webTryOnTitle}>Pega el link y pruébatelo</Text>
+              </View>
+              <Text style={styles.webTryOnArrow}>›</Text>
+            </Pressable>
 
             <ScrollView horizontal scrollEnabled={!wardrobeDrag && !tryOnRendering} showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.tryOnRail, tryOnRendering && styles.tryOnRailDisabled]} pointerEvents={tryOnRendering ? "none" : "auto"}>
               {tryOnWardrobe.map((item) => (
@@ -1859,13 +1965,23 @@ export default function App() {
 
       <Modal visible={importOpen} transparent animationType="slide" onRequestClose={() => setImportOpen(false)}>
         <View style={styles.modalBackdrop}>
-          <View style={styles.modalSheet}>
+          <ScrollView style={styles.modalSheet} contentContainerStyle={styles.importModalContent} showsVerticalScrollIndicator={false}>
             <Pressable style={styles.closeButton} onPress={() => setImportOpen(false)}><Text style={styles.closeText}>×</Text></Pressable>
             <View style={styles.scanOrb}><Text style={styles.scanOrbText}>✦</Text></View>
             <Text style={[styles.eyebrow, styles.centerText]}>CARRETE DEL TELÉFONO</Text>
             <Text style={styles.modalTitle}>Elige las fotos para tu armario.</Text>
             <Text style={styles.modalIntro}>La selección permanece local hasta que tú decidas subirla. La nube nunca toma fotos por su cuenta.</Text>
             <View style={styles.privacyPill}><View style={cloudSession ? styles.greenDot : styles.rustDot} /><Text style={styles.privacyPillText}>{cloudSession ? "CUENTA PRIVADA PROTEGIDA" : "PREPARANDO CUENTA PRIVADA"}</Text></View>
+
+            <Pressable style={styles.webImportChoice} onPress={() => { setImportOpen(false); setLinkImportOpen(true); }}>
+              <View style={styles.webImportChoiceIcon}><Text style={styles.webImportChoiceIconText}>↗</Text></View>
+              <View style={styles.webImportChoiceCopy}>
+                <Text style={styles.webImportChoiceTitle}>Importar desde un enlace</Text>
+                <Text style={styles.webImportChoiceHint}>Gorra, playera, chamarra, pantalón o calzado</Text>
+              </View>
+              <Text style={styles.webImportChoiceArrow}>›</Text>
+            </Pressable>
+            <Text style={styles.importDivider}>O DESDE TUS FOTOS</Text>
 
             <Pressable style={styles.photoPicker} onPress={pickPhotos} disabled={picking}>
               {picking ? <ActivityIndicator color="#A34F31" /> : <Text style={styles.photoPickerTitle}>{photos.length ? "Cambiar selección" : "Abrir carrete"}</Text>}
@@ -1895,6 +2011,59 @@ export default function App() {
                 <Pressable onPress={() => { setPhotos([]); setBatchReady(false); }}><Text style={styles.deleteText}>Eliminar selección local</Text></Pressable>
               </>
             )}
+          </ScrollView>
+        </View>
+      </Modal>
+
+      <Modal visible={linkImportOpen} transparent animationType="slide" onRequestClose={() => !productImporting && setLinkImportOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalSheet}>
+            <Pressable style={styles.closeButton} onPress={() => setLinkImportOpen(false)} disabled={productImporting}><Text style={styles.closeText}>×</Text></Pressable>
+            <View style={styles.scanOrb}><Text style={styles.scanOrbText}>↗</Text></View>
+            <Text style={[styles.eyebrow, styles.centerText]}>PRENDA DE INTERNET</Text>
+            <Text style={styles.modalTitle}>Pega el link. Vesta te la pone.</Text>
+            <Text style={styles.modalIntro}>Importaremos la imagen pública del producto a tu armario privado y crearemos una prueba realista sobre tu avatar.</Text>
+
+            <TextInput
+              style={styles.productUrlInput}
+              value={productUrl}
+              onChangeText={setProductUrl}
+              placeholder="https://tienda.com/producto"
+              placeholderTextColor="#9B9386"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              returnKeyType="done"
+              editable={!productImporting}
+              onSubmitEditing={() => importProductFromUrl().catch(() => undefined)}
+              accessibilityLabel="Enlace de la prenda"
+            />
+            <Pressable style={styles.pasteLinkButton} onPress={() => pasteProductUrl().catch(() => undefined)} disabled={productImporting}>
+              <Text style={styles.pasteLinkButtonText}>Pegar desde portapapeles</Text>
+            </Pressable>
+
+            <Text style={styles.productPlacementLabel}>¿DÓNDE VA?</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.productPlacementRow}>
+              {productPlacements.map((option) => (
+                <Pressable
+                  key={option.id}
+                  style={[styles.productPlacementChip, productPlacement === option.id && styles.productPlacementChipActive]}
+                  onPress={() => setProductPlacement(option.id)}
+                  disabled={productImporting}
+                >
+                  <Text style={[styles.productPlacementChipText, productPlacement === option.id && styles.productPlacementChipTextActive]}>{option.label}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+
+            <Pressable
+              style={[styles.fullButton, styles.importProductButton, (!productUrl.trim() || productImporting) && styles.disabledButton]}
+              onPress={() => importProductFromUrl().catch(() => undefined)}
+              disabled={!productUrl.trim() || productImporting}
+            >
+              {productImporting ? <ActivityIndicator color={paper} /> : <Text style={styles.fullButtonText}>✦ Importar y probar ahora</Text>}
+            </Pressable>
+            <Text style={styles.productImportPrivacy}>Solo se lee la página pública que pegaste. La referencia importada queda protegida dentro de tu cuenta y también puede combinarse en Looks.</Text>
           </View>
         </View>
       </Modal>
@@ -2015,7 +2184,12 @@ export default function App() {
                 <Text style={styles.detailIntro}>{selectedItem.description || (selectedItem.imagePath ? `Detectada con ${selectedItem.confidence ?? 0}% de confianza. La vista actual muestra la foto de evidencia hasta generar el recorte transparente.` : "Muestra visual del armario. Esta ficha será reemplazada por la prenda extraída de tus fotos.")}</Text>
                 {selectedItem.qaSummary?.summary && <Text style={styles.qaSummary}>{selectedItem.qaSummary.summary}</Text>}
                 {selectedItem.isBasic && <Text style={styles.qaSummary}>Básico reconocido · se conserva la evidencia y no se usa ImageGen.</Text>}
-                {selectedItem.imagePath && !selectedItem.isBasic && (
+                {selectedItem.sourceType === "internet" && selectedItem.sourceUrl && (
+                  <Pressable style={styles.secondaryButton} onPress={() => Linking.openURL(selectedItem.sourceUrl!).catch(() => undefined)}>
+                    <Text style={styles.secondaryButtonText}>Abrir página del producto ↗</Text>
+                  </Pressable>
+                )}
+                {selectedItem.imagePath && !selectedItem.isBasic && selectedItem.sourceType !== "internet" && (
                   <Pressable style={[styles.fullButton, styles.reconstructAction, reconstructingId === selectedItem.id && styles.disabledButton]} onPress={() => chooseReconstruction(selectedItem)} disabled={reconstructingId === selectedItem.id}>
                     <Text style={styles.fullButtonText}>{reconstructingId === selectedItem.id ? "Creando y verificando…" : selectedItem.status === "approved" ? "Regenerar PNG" : "Crear PNG transparente"}</Text>
                   </Pressable>
@@ -2125,6 +2299,8 @@ const styles = StyleSheet.create({
   cloudGarmentImage: { width: "100%", height: "100%" },
   evidenceBadge: { position: "absolute", left: 6, bottom: 6, paddingHorizontal: 6, paddingVertical: 4, backgroundColor: "rgba(33,31,27,.78)" },
   evidenceBadgeText: { color: paper, fontSize: 6, fontWeight: "800", letterSpacing: 0.7 },
+  internetBadge: { position: "absolute", right: 6, bottom: 6, paddingHorizontal: 7, paddingVertical: 4, borderRadius: 9, backgroundColor: rust },
+  internetBadgeText: { color: "white", fontSize: 6, fontWeight: "900", letterSpacing: 0.8 },
   cardCopy: { padding: 10, backgroundColor: paper },
   cardTitle: { color: ink, fontSize: 10, fontWeight: "700" },
   cardMeta: { color: muted, fontSize: 8, marginTop: 3 },
@@ -2147,6 +2323,13 @@ const styles = StyleSheet.create({
   tryOnIntro: { color: muted, fontSize: 10, lineHeight: 15, marginTop: 7, maxWidth: 275 },
   clearTryOnButton: { paddingHorizontal: 12, paddingVertical: 9, borderWidth: 1, borderColor: line, borderRadius: 18, marginBottom: 2 },
   clearTryOnText: { color: muted, fontSize: 8, fontWeight: "700" },
+  webTryOnBanner: { flexDirection: "row", alignItems: "center", gap: 11, marginBottom: 14, paddingHorizontal: 12, paddingVertical: 11, borderWidth: 1, borderColor: "#D5B8AA", borderRadius: 14, backgroundColor: "#F5E9E2" },
+  webTryOnIcon: { width: 34, height: 34, alignItems: "center", justifyContent: "center", borderRadius: 17, backgroundColor: rust },
+  webTryOnIconText: { color: "white", fontSize: 16, fontWeight: "700" },
+  webTryOnCopy: { flex: 1 },
+  webTryOnEyebrow: { color: rust, fontSize: 6, fontWeight: "900", letterSpacing: 0.8 },
+  webTryOnTitle: { color: ink, fontSize: 11, fontWeight: "800", marginTop: 3 },
+  webTryOnArrow: { color: rust, fontSize: 24, fontWeight: "300" },
   tryOnRail: { gap: 8, paddingVertical: 4, paddingRight: 12, marginBottom: 14 },
   tryOnRailDisabled: { opacity: 0.48 },
   tryOnRailItem: { width: 78, overflow: "hidden", borderWidth: 1, borderColor: line, borderRadius: 8, backgroundColor: "#F8F5ED" },
@@ -2232,6 +2415,7 @@ const styles = StyleSheet.create({
   outfitPieceName: { color: ink, fontSize: 9, lineHeight: 14 },
   modalBackdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(22,20,17,.45)" },
   modalSheet: { maxHeight: "92%", paddingHorizontal: 20, paddingTop: 32, paddingBottom: 30, backgroundColor: paper, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
+  importModalContent: { paddingBottom: 4 },
   profileSheet: { maxHeight: "92%", paddingHorizontal: 22, paddingTop: 38, paddingBottom: 28, backgroundColor: paper, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
   avatarSheet: { maxHeight: "94%", overflow: "hidden", backgroundColor: paper, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
   avatarSheetContent: { paddingHorizontal: 20, paddingTop: 38, paddingBottom: 36 },
@@ -2244,6 +2428,14 @@ const styles = StyleSheet.create({
   modalIntro: { color: muted, maxWidth: 330, alignSelf: "center", textAlign: "center", fontSize: 10, lineHeight: 16, marginTop: 12, marginBottom: 13 },
   privacyPill: { alignSelf: "center", flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 20, borderWidth: 1, borderColor: "#BCC5B8", backgroundColor: "#EDF0E8" },
   privacyPillText: { color: "#60705B", fontSize: 7, fontWeight: "800", letterSpacing: 0.7 },
+  webImportChoice: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 16, padding: 12, borderWidth: 1, borderColor: "#D5B8AA", borderRadius: 13, backgroundColor: "#F5E9E2" },
+  webImportChoiceIcon: { width: 32, height: 32, alignItems: "center", justifyContent: "center", borderRadius: 16, backgroundColor: rust },
+  webImportChoiceIconText: { color: "white", fontSize: 14, fontWeight: "800" },
+  webImportChoiceCopy: { flex: 1 },
+  webImportChoiceTitle: { color: ink, fontSize: 10, fontWeight: "800" },
+  webImportChoiceHint: { color: muted, fontSize: 7, lineHeight: 11, marginTop: 3 },
+  webImportChoiceArrow: { color: rust, fontSize: 22, fontWeight: "300" },
+  importDivider: { color: muted, fontSize: 6, fontWeight: "900", letterSpacing: 1, textAlign: "center", marginTop: 16, marginBottom: -4 },
   photoPicker: { height: 91, marginTop: 16, marginBottom: 12, alignItems: "center", justifyContent: "center", borderWidth: 1, borderStyle: "dashed", borderColor: "#B8B0A2", backgroundColor: "#F8F5ED" },
   photoPickerTitle: { color: ink, fontSize: 11, fontWeight: "700" },
   photoPickerHint: { color: muted, fontSize: 8, marginTop: 6 },
@@ -2255,6 +2447,17 @@ const styles = StyleSheet.create({
   photoSummary: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 13 },
   photoSummaryTitle: { color: ink, fontSize: 9, fontWeight: "700" },
   photoSummaryMeta: { color: muted, fontSize: 8 },
+  productUrlInput: { minHeight: 52, marginTop: 6, paddingHorizontal: 14, paddingVertical: 12, borderWidth: 1, borderColor: "#B8B0A2", borderRadius: 12, backgroundColor: "#F8F5ED", color: ink, fontSize: 10 },
+  pasteLinkButton: { alignSelf: "center", paddingHorizontal: 12, paddingVertical: 10 },
+  pasteLinkButtonText: { color: rust, fontSize: 8, fontWeight: "800" },
+  productPlacementLabel: { color: muted, fontSize: 6, fontWeight: "900", letterSpacing: 1, marginTop: 8, marginBottom: 7 },
+  productPlacementRow: { gap: 6, paddingRight: 12 },
+  productPlacementChip: { paddingHorizontal: 11, paddingVertical: 8, borderWidth: 1, borderColor: line, borderRadius: 16, backgroundColor: "#F8F5ED" },
+  productPlacementChipActive: { borderColor: rust, backgroundColor: rust },
+  productPlacementChipText: { color: muted, fontSize: 7, fontWeight: "700" },
+  productPlacementChipTextActive: { color: "white" },
+  importProductButton: { marginTop: 18, backgroundColor: rust },
+  productImportPrivacy: { color: muted, fontSize: 7, lineHeight: 12, textAlign: "center", marginTop: 11 },
   fullButton: { width: "100%", alignItems: "center", backgroundColor: ink, paddingVertical: 15 },
   secondaryButton: { width: "100%", alignItems: "center", marginTop: 14, borderWidth: 1, borderColor: ink, paddingVertical: 13 },
   secondaryButtonText: { color: ink, fontSize: 9, fontWeight: "800" },
