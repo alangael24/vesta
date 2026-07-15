@@ -322,7 +322,7 @@ export default function App() {
     const batchesResponse = await cloudFetch(session, "/api/v1/batches", { method: "GET" });
     if (!batchesResponse.ok) return;
     const payload = await batchesResponse.json() as { batches?: Array<{ id: string; status: string }> };
-    const pendingBatch = payload.batches?.find((batch) => batch.status === "uploaded");
+    const pendingBatch = payload.batches?.find((batch) => batch.status === "uploaded" || batch.status === "failed");
     if (!pendingBatch) return;
 
     Alert.alert(
@@ -565,8 +565,8 @@ export default function App() {
           usage: analysis.usage,
         }),
       });
-      const result = await response.json() as { error?: string; garmentCount?: number };
-      if (!response.ok) throw new Error(result.error || "experimental_inventory_failed");
+      const result = await response.json() as { error?: string; detail?: string; garmentCount?: number };
+      if (!response.ok) throw new Error(result.detail ? `${result.error || "experimental_inventory_failed"}: ${result.detail}` : result.error || "experimental_inventory_failed");
       setExperimentalProgress(100);
       await loadWardrobe(cloudSession);
       Alert.alert(

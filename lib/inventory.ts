@@ -198,8 +198,14 @@ async function persistCandidates(ownerId: string, batchId: string, results: Inve
       const fingerprint = fingerprintFor(candidate);
       const garmentId = `garment_${crypto.randomUUID()}`;
       const now = new Date().toISOString();
-      const previewKey = garmentPreviewKey(ownerId, garmentId);
-      await createEvidencePreview(ownerId, batchId, photosById.get(evidence[0].photo_id)!, evidence[0].bbox, previewKey);
+      const requestedPreviewKey = garmentPreviewKey(ownerId, garmentId);
+      let previewKey: string | null = null;
+      try {
+        await createEvidencePreview(ownerId, batchId, photosById.get(evidence[0].photo_id)!, evidence[0].bbox, requestedPreviewKey);
+        previewKey = requestedPreviewKey;
+      } catch {
+        previewKey = null;
+      }
       await db.insert(garments).values({
         id: garmentId,
         ownerId,

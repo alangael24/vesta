@@ -129,7 +129,7 @@ export async function POST(request: Request, context: RouteContext) {
       db.update(processingJobs).set({ status: "failed", errorCode: code, errorMessage: message, updatedAt: failedAt }).where(eq(processingJobs.id, job.id)),
       db.update(importBatches).set({ status: "failed", updatedAt: failedAt }).where(eq(importBatches.id, batchId)),
     ]);
-    return Response.json({ error: code }, { status: 502 });
+    return Response.json({ error: code, detail: message }, { status: 502 });
   }
 }
 
