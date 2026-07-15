@@ -99,35 +99,7 @@ const cloudKeys = {
 const wardrobeSprite = require("./assets/wardrobe-sprite.png") as ImageSourcePropType;
 const outfitSprite = require("./assets/outfit-sprite.png") as ImageSourcePropType;
 
-const wardrobe: WardrobeItem[] = [
-  { id: 0, spriteIndex: 0, name: "Camiseta negra", category: "tops", type: "Camiseta", color: "Negro" },
-  { id: 1, spriteIndex: 1, name: "Polo marino", category: "tops", type: "Polo", color: "Azul marino" },
-  { id: 2, spriteIndex: 2, name: "Camiseta cruda", category: "tops", type: "Camiseta", color: "Crudo" },
-  { id: 3, spriteIndex: 3, name: "Oxford celeste", category: "tops", type: "Camisa", color: "Azul claro" },
-  { id: 4, spriteIndex: 4, name: "Sobrecamisa cuadro", category: "layers", type: "Sobrecamisa", color: "Azul" },
-  { id: 5, spriteIndex: 5, name: "Polo tejido", category: "tops", type: "Polo", color: "Arena" },
-  { id: 6, spriteIndex: 6, name: "Jersey avena", category: "layers", type: "Jersey", color: "Avena" },
-  { id: 7, spriteIndex: 7, name: "Chaqueta denim", category: "layers", type: "Chaqueta", color: "Índigo" },
-  { id: 8, spriteIndex: 8, name: "Field jacket", category: "layers", type: "Chaqueta", color: "Oliva" },
-  { id: 9, spriteIndex: 9, name: "Pantalón óxido", category: "bottoms", type: "Pantalón", color: "Óxido" },
-  { id: 10, spriteIndex: 10, name: "Chino arena", category: "bottoms", type: "Chino", color: "Arena" },
-  { id: 11, spriteIndex: 11, name: "Pantalón cacao", category: "bottoms", type: "Pantalón", color: "Cacao" },
-  { id: 12, spriteIndex: 12, name: "Jean lavado", category: "bottoms", type: "Jeans", color: "Azul claro" },
-  { id: 13, spriteIndex: 13, name: "Short negro", category: "bottoms", type: "Short", color: "Negro" },
-  { id: 14, spriteIndex: 14, name: "Gorra camel", category: "accessories", type: "Gorra", color: "Camel" },
-  { id: 15, spriteIndex: 15, name: "Gafas negras", category: "accessories", type: "Gafas", color: "Negro" },
-];
-
-const outfits: Outfit[] = [
-  { id: 0, name: "Oliva & óxido", occasion: "Tarde casual", note: "Tonos terrosos con una base clara para mantener el look fresco." },
-  { id: 1, name: "Marino mediterráneo", occasion: "Comida", note: "Contraste limpio entre azul profundo y arena." },
-  { id: 2, name: "Negro & cacao", occasion: "Cena", note: "Dos tonos profundos con texturas distintas." },
-  { id: 3, name: "Azul de verano", occasion: "Fin de semana", note: "Una combinación ligera y relajada." },
-  { id: 4, name: "Avena & denim", occasion: "Café", note: "Suave, equilibrado y perfecto para una mañana fresca." },
-  { id: 5, name: "Capas suaves", occasion: "Trabajo flexible", note: "Patrón y neutros con suficiente espacio para respirar." },
-  { id: 6, name: "Denim ligero", occasion: "Viaje", note: "Una fórmula fácil para cambios de clima." },
-  { id: 7, name: "Punto cálido", occasion: "Atardecer", note: "Textura cálida con un acento de color terroso." },
-];
+const outfits: Outfit[] = [];
 
 const filters: { id: Category; label: string }[] = [
   { id: "all", label: "Todo" },
@@ -218,7 +190,7 @@ export default function App() {
   const [builderItems, setBuilderItems] = useState<ItemId[]>([2, 9]);
   const [occasion, setOccasion] = useState("Diario");
 
-  const activeWardrobe = cloudWardrobe.length ? cloudWardrobe : wardrobe;
+  const activeWardrobe = cloudWardrobe;
 
   const visibleItems = useMemo(
     () => activeWardrobe.filter((item) => filter === "all" || item.category === filter),
@@ -632,7 +604,7 @@ export default function App() {
               <View>
                 <View style={styles.headingRow}>
                   <View>
-                    <Text style={styles.eyebrow}>{cloudWardrobe.length ? "TU ARMARIO PRIVADO" : "COLECCIÓN DE MUESTRA"}</Text>
+                    <Text style={styles.eyebrow}>TU ARMARIO PRIVADO</Text>
                     <Text style={styles.pageTitle}>Armario <Text style={styles.count}>{activeWardrobe.length}</Text></Text>
                   </View>
                   <Pressable style={styles.importButton} onPress={() => setImportOpen(true)}>
@@ -656,6 +628,12 @@ export default function App() {
                     </Pressable>
                   ))}
                 </ScrollView>
+              </View>
+            }
+            ListEmptyComponent={
+              <View style={styles.emptyCollection}>
+                <Text style={styles.emptyCollectionTitle}>Todavía no hay prendas.</Text>
+                <Text style={styles.emptyCollectionCopy}>Importa fotos para que Luna construya tu armario real.</Text>
               </View>
             }
             renderItem={({ item }) => (
@@ -720,10 +698,16 @@ export default function App() {
             ListHeaderComponent={
               <View style={styles.headingRow}>
                 <View>
-                  <Text style={styles.eyebrow}>INSPIRACIÓN DE MUESTRA</Text>
-                  <Text style={styles.pageTitle}>Looks <Text style={styles.count}>8</Text></Text>
+                  <Text style={styles.eyebrow}>TUS COMBINACIONES</Text>
+                  <Text style={styles.pageTitle}>Looks <Text style={styles.count}>0</Text></Text>
                 </View>
                 <Pressable style={styles.importButton} onPress={() => setView("builder")}><Text style={styles.importButtonText}>Crear　✦</Text></Pressable>
+              </View>
+            }
+            ListEmptyComponent={
+              <View style={styles.emptyCollection}>
+                <Text style={styles.emptyCollectionTitle}>Aún no hay looks.</Text>
+                <Text style={styles.emptyCollectionCopy}>Aparecerán cuando tu armario tenga prendas reales.</Text>
               </View>
             }
             renderItem={({ item }) => (
@@ -902,6 +886,9 @@ const styles = StyleSheet.create({
   filterActive: { backgroundColor: ink, borderColor: ink },
   filterText: { color: muted, fontSize: 9 },
   filterTextActive: { color: paper },
+  emptyCollection: { alignItems: "center", marginTop: 34, paddingHorizontal: 26, paddingVertical: 34, borderWidth: 1, borderStyle: "dashed", borderColor: line, backgroundColor: "#F8F5ED" },
+  emptyCollectionTitle: { color: ink, fontSize: 17, fontFamily: Platform.select({ ios: "Georgia", android: "serif" }) },
+  emptyCollectionCopy: { color: muted, maxWidth: 250, marginTop: 8, textAlign: "center", fontSize: 9, lineHeight: 14 },
   cardRow: { gap: 9 },
   garmentCard: { flex: 1, position: "relative", marginBottom: 13, backgroundColor: "#EAE5DA", borderWidth: StyleSheet.hairlineWidth, borderColor: line },
   spriteFrame: { width: "100%", overflow: "hidden", backgroundColor: "#E8E2D6" },
