@@ -39,6 +39,9 @@ PODS:
     - ExpoModulesCore
   - ExpoFont (57.0.0):
     - ExpoModulesCore
+  - ExpoImageManipulator (57.0.2):
+    - ExpoModulesCore
+    - SDWebImageWebPCoder
   - ExpoImagePicker (57.0.2):
     - ExpoModulesCore
   - ExpoKeepAwake (57.0.0):
@@ -81,6 +84,18 @@ PODS:
   - hermes-engine (250829098.0.14):
     - hermes-engine/Pre-built (= 250829098.0.14)
   - hermes-engine/Pre-built (250829098.0.14)
+  - libwebp (1.5.0):
+    - libwebp/demux (= 1.5.0)
+    - libwebp/mux (= 1.5.0)
+    - libwebp/sharpyuv (= 1.5.0)
+    - libwebp/webp (= 1.5.0)
+  - libwebp/demux (1.5.0):
+    - libwebp/webp
+  - libwebp/mux (1.5.0):
+    - libwebp/demux
+  - libwebp/sharpyuv (1.5.0)
+  - libwebp/webp (1.5.0):
+    - libwebp/sharpyuv
   - RCTDeprecation (0.86.0)
   - RCTRequired (0.86.0)
   - RCTSwiftUI (0.86.0)
@@ -1901,6 +1916,10 @@ PODS:
     - React-utils (= 0.86.0)
     - ReactNativeDependencies
   - ReactNativeDependencies (0.86.0)
+  - SDWebImage/Core (5.21.7)
+  - SDWebImageWebPCoder (0.15.0):
+    - libwebp (~> 1.0)
+    - SDWebImage/Core (~> 5.17)
   - Yoga (0.0.0)
 
 DEPENDENCIES:
@@ -1912,6 +1931,7 @@ DEPENDENCIES:
   - "ExpoDomWebView (from `../node_modules/.pnpm/@expo+dom-webview@57.0.0_expo@57.0.4_react-native@0.86.0_@babel+core@7.29.7_@types+reac_7e373d070d2596497de61906e9fc6195/node_modules/@expo/dom-webview/ios`)"
   - "ExpoFileSystem (from `../node_modules/.pnpm/expo-file-system@57.0.0_expo@57.0.4_react-native@0.86.0_@babel+core@7.29.7_@types+react@19.2.17_react@19.2.3_/node_modules/expo-file-system/ios`)"
   - "ExpoFont (from `../node_modules/.pnpm/expo-font@57.0.0_expo@57.0.4_react-native@0.86.0_@babel+core@7.29.7_@types+react@19.2.17_react@19.2.3__react@19.2.3/node_modules/expo-font/ios`)"
+  - "ExpoImageManipulator (from `../node_modules/.pnpm/expo-image-manipulator@57.0.2_expo@57.0.4/node_modules/expo-image-manipulator/ios`)"
   - "ExpoImagePicker (from `../node_modules/.pnpm/expo-image-picker@57.0.2_expo@57.0.4/node_modules/expo-image-picker/ios`)"
   - "ExpoKeepAwake (from `../node_modules/.pnpm/expo-keep-awake@57.0.0_expo@57.0.4_react@19.2.3/node_modules/expo-keep-awake/ios`)"
   - "ExpoLogBox (from `../node_modules/.pnpm/@expo+log-box@57.0.0_@expo+dom-webview@57.0.0_expo@57.0.4_react-native@0.86.0_@babel+co_40801bfb764f817962da785684d26db4/node_modules/@expo/log-box`)"
@@ -1996,6 +2016,12 @@ DEPENDENCIES:
   - "ReactNativeDependencies (from `../node_modules/.pnpm/react-native@0.86.0_@babel+core@7.29.7_@types+react@19.2.17_react@19.2.3/node_modules/react-native/third-party-podspecs/ReactNativeDependencies.podspec`)"
   - "Yoga (from `../node_modules/.pnpm/react-native@0.86.0_@babel+core@7.29.7_@types+react@19.2.17_react@19.2.3/node_modules/react-native/ReactCommon/yoga`)"
 
+SPEC REPOS:
+  trunk:
+    - libwebp
+    - SDWebImage
+    - SDWebImageWebPCoder
+
 EXTERNAL SOURCES:
   EXConstants:
     :path: "../node_modules/.pnpm/expo-constants@57.0.3_expo@57.0.4_react-native@0.86.0_@babel+core@7.29.7_@types+react@19.2.17_react@19.2.3_/node_modules/expo-constants/ios"
@@ -2013,6 +2039,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/.pnpm/expo-file-system@57.0.0_expo@57.0.4_react-native@0.86.0_@babel+core@7.29.7_@types+react@19.2.17_react@19.2.3_/node_modules/expo-file-system/ios"
   ExpoFont:
     :path: "../node_modules/.pnpm/expo-font@57.0.0_expo@57.0.4_react-native@0.86.0_@babel+core@7.29.7_@types+react@19.2.17_react@19.2.3__react@19.2.3/node_modules/expo-font/ios"
+  ExpoImageManipulator:
+    :path: "../node_modules/.pnpm/expo-image-manipulator@57.0.2_expo@57.0.4/node_modules/expo-image-manipulator/ios"
   ExpoImagePicker:
     :path: "../node_modules/.pnpm/expo-image-picker@57.0.2_expo@57.0.4/node_modules/expo-image-picker/ios"
   ExpoKeepAwake:
@@ -2188,6 +2216,7 @@ SPEC CHECKSUMS:
   ExpoDomWebView: ae603aa2c151929ebb1ee68c4607e105b68b4ebc
   ExpoFileSystem: bf907fa86da7cc9088331f1930a572f43353ed50
   ExpoFont: 15dc02c38fcb621aa56c87c3ab840f281e92f6cf
+  ExpoImageManipulator: e3442c95266625848151b93179c49f8f331b06c3
   ExpoImagePicker: 028fde7f7f9a6d17db48f85dc15fd7046041ee3d
   ExpoKeepAwake: c5a7e46e8f52c093370ea89457d73c060d0b2a2e
   ExpoLogBox: 71393ad8a15193044673cee88f6f41cf014bccd7
@@ -2197,6 +2226,7 @@ SPEC CHECKSUMS:
   ExpoSecureStore: 8e3efc4a558e43fbbd80b61b0106b8521a409545
   FBLazyVector: b3e7ad108f0d882e30445c5527d774e3fd432f3d
   hermes-engine: 17159bba61163f670410fd00b458f62b280811bb
+  libwebp: 02b23773aedb6ff1fd38cec7a77b81414c6842a8
   RCTDeprecation: 2a74a2c57675e64419bd89078efde81f7c1de90b
   RCTRequired: 30451112e6fef4e6f31b4e7eee0845156e35e4b0
   RCTSwiftUI: 5aaf0b07e747ba749dc6acc94d8bd41eea4b570f
@@ -2269,6 +2299,8 @@ SPEC CHECKSUMS:
   ReactCodegen: bade46543ec2b4e8174342fec395678220e7c252
   ReactCommon: 4d01bfb533b93a2103329dfefc74db6a9e272888
   ReactNativeDependencies: fa0a54b3f5319ae0e3b9aff32bfee7a424b88e66
+  SDWebImage: e9fc87c1aab89a8ab1bbd74eba378c6f53be8abf
+  SDWebImageWebPCoder: 0e06e365080397465cc73a7a9b472d8a3bd0f377
   Yoga: 94172d87dd5d83fc929bf1ee53121b5d4490b5f2
 
 PODFILE CHECKSUM: 3fbc1889c05ebebaa075e5683c3ebe963508b841

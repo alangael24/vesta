@@ -21,6 +21,18 @@ import {
   Text,
   View,
 } from "react-native";
+import {
+  beginDeviceAuthorization,
+  CODEX_DEVICE_URL,
+  completeDeviceAuthorization,
+  getCodexSession,
+  logoutCodex,
+} from "./codex-auth";
+import {
+  analyzeExperimentalInventory,
+  EXPERIMENTAL_CODEX_MODEL,
+  ExperimentalPhoto,
+} from "./experimental-inventory";
 
 type ViewName = "closet" | "builder" | "looks";
 type Category = "all" | "tops" | "layers" | "bottoms" | "accessories";
@@ -196,6 +208,9 @@ export default function App() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [processing, setProcessing] = useState(false);
+  const [codexConnected, setCodexConnected] = useState(false);
+  const [codexConnecting, setCodexConnecting] = useState(false);
+  const [experimentalProgress, setExperimentalProgress] = useState(0);
   const [reconstructingId, setReconstructingId] = useState<ItemId | null>(null);
   const [cloudWardrobe, setCloudWardrobe] = useState<WardrobeItem[]>([]);
   const [duplicateCount, setDuplicateCount] = useState(0);
@@ -285,6 +300,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    getCodexSession().then((session) => setCodexConnected(Boolean(session))).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
     if (!cloudSession) {
       setCloudWardrobe([]);
       return;
@@ -347,6 +366,39 @@ export default function App() {
     setCloudSession(null);
   };
 
+  const connectCodexExperiment = async () => {
+    if (codexConnecting) return;
+    setCodexConnecting(true);
+    try {
+      const pending = await beginDeviceAuthorization();
+      await Clipboard.setStringAsync(pending.userCode);
+      const shouldContinue = await new Promise<boolean>((resolve) => Alert.alert(
+        "Código de OpenAI copiado",
+        `${pending.userCode}\n\nPulsa “Abrir OpenAI”, pega el código y autoriza esta prueba. Después vuelve a Vesta.`,
+        [
+          { text: "Cancelar", style: "cancel", onPress: () => resolve(false) },
+          { text: "Abrir OpenAI", onPress: () => resolve(true) },
+        ],
+        { cancelable: false },
+      ));
+      if (!shouldContinue) return;
+      await Linking.openURL(CODEX_DEVICE_URL);
+      await completeDeviceAuthorization(pending);
+      setCodexConnected(true);
+      Alert.alert("ChatGPT conectado", "La sesión experimental quedó guardada en el Keychain de este iPhone.");
+    } catch {
+      Alert.alert("No se completó la conexión", "Puedes volver a intentarlo. No se guardó ninguna sesión incompleta.");
+    } finally {
+      setCodexConnecting(false);
+    }
+  };
+
+  const disconnectCodexExperiment = async () => {
+    await logoutCodex();
+    setCodexConnected(false);
+    Alert.alert("ChatGPT desconectado", "Los tokens experimentales se eliminaron del Keychain.");
+  };
+
   const pairFromClipboard = async () => {
     const value = (await Clipboard.getStringAsync()).trim();
     if (!value.startsWith("vesta://pair?")) {
@@ -383,7 +435,7 @@ export default function App() {
         body: JSON.stringify({ photos: manifest, originalsPolicy: "retain_private" }),
       });
       if (!batchResponse.ok) throw new Error("batch_failed");
-      const batch = await batchResponse.json() as { batchId: string; photos: Array<{ uploadPath: string }> };
+      const batch = await batchResponse.json() as { batchId: string; photos: Array<{ id: string; uploadPath: string }> };
 
       for (let index = 0; index < photos.length; index += 1) {
         const fileResponse = await fetch(photos[index].uri);
@@ -400,7 +452,22 @@ export default function App() {
       setBatchReady(false);
       setImportOpen(false);
       const uploadedCount = photos.length;
+      const experimentalPhotos: ExperimentalPhoto[] = photos.map((asset, index) => ({
+        id: batch.photos[index].id,
+        asset,
+      }));
       setPhotos([]);
+      if (codexConnected) {
+        Alert.alert(
+          "Fotos guardadas en tu nube",
+          `${uploadedCount} fotos ya están privadas en Vesta. Para esta prueba, las copias reducidas se enviarán directamente desde tu iPhone al endpoint de Codex asociado a tu suscripción de ChatGPT. Los tokens nunca pasarán por la nube de Vesta.`,
+          [
+            { text: "Analizar después", style: "cancel" },
+            { text: "Usar ChatGPT (prueba)", onPress: () => startExperimentalProcessing(batch.batchId, experimentalPhotos) },
+          ],
+        );
+        return;
+      }
       Alert.alert(
         "Fotos guardadas en tu nube",
         `${uploadedCount} fotos ya están privadas en Vesta. Para detectar prendas se enviarán copias reducidas a la API de OpenAI. No se usan para entrenar por defecto; sus registros de seguridad pueden conservarse hasta 30 días. ¿Qué prefieres?`,
@@ -414,6 +481,44 @@ export default function App() {
       Alert.alert("La subida se interrumpió", "Tus fotos locales siguen intactas. Puedes intentarlo otra vez.");
     } finally {
       setUploading(false);
+    }
+  };
+
+  const startExperimentalProcessing = async (batchId: string, selectedPhotos: ExperimentalPhoto[]) => {
+    if (!cloudSession || processing) return;
+    setProcessing(true);
+    setExperimentalProgress(0);
+    try {
+      const results = await analyzeExperimentalInventory(selectedPhotos, (completed, total) => {
+        setExperimentalProgress(Math.round((completed / total) * 70));
+      });
+      setExperimentalProgress(82);
+      const response = await cloudFetch(cloudSession, `/api/v1/batches/${batchId}/experimental-inventory`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "chatgpt-codex-experimental",
+          model: EXPERIMENTAL_CODEX_MODEL,
+          consent: true,
+          results,
+        }),
+      });
+      const result = await response.json() as { error?: string; garmentCount?: number };
+      if (!response.ok) throw new Error(result.error || "experimental_inventory_failed");
+      setExperimentalProgress(100);
+      await loadWardrobe(cloudSession);
+      Alert.alert(
+        "Inventario experimental listo",
+        `Vesta detectó ${result.garmentCount ?? 0} prendas con tu suscripción de ChatGPT. Revísalas: esta modalidad todavía no deduplica ni crea PNG transparentes.`,
+      );
+    } catch {
+      Alert.alert(
+        "La prueba no terminó",
+        "Tus originales siguen en tu nube privada. Si la sesión de ChatGPT expiró, vuelve a conectarla desde tu perfil y repite con un lote nuevo.",
+      );
+    } finally {
+      setExperimentalProgress(0);
+      setProcessing(false);
     }
   };
 
@@ -509,7 +614,7 @@ export default function App() {
           </Pressable>
           <View style={styles.cloudBadge}>
             <View style={cloudSession ? styles.greenDot : styles.rustDot} />
-            <Text style={[styles.cloudBadgeText, !cloudSession && styles.cloudBadgePending]}>{processing ? "ANALIZANDO…" : reconstructingId ? "CREANDO PNG…" : cloudSession ? "NUBE CONECTADA" : "NUBE POR EMPAREJAR"}</Text>
+            <Text style={[styles.cloudBadgeText, !cloudSession && styles.cloudBadgePending]}>{processing ? experimentalProgress ? `ANALIZANDO ${experimentalProgress}%` : "ANALIZANDO…" : reconstructingId ? "CREANDO PNG…" : cloudSession ? "NUBE CONECTADA" : "NUBE POR EMPAREJAR"}</Text>
           </View>
           <Pressable style={styles.avatar} onPress={() => setProfileOpen(true)} accessibilityLabel="Privacidad y perfil">
             <Text style={styles.avatarText}>AL</Text>
@@ -702,11 +807,15 @@ export default function App() {
               <View style={styles.architectureRow}><Text style={styles.architectureLabel}>DUPLICADOS APARTADOS</Text><Text style={styles.architectureValue}>{duplicateCount}</Text></View>
               <View style={styles.architectureRow}><Text style={styles.architectureLabel}>ACCESO</Text><Text style={styles.architectureValue}>Solo Alan</Text></View>
               <View style={styles.architectureRow}><Text style={styles.architectureLabel}>ESTADO</Text><Text style={cloudSession ? styles.architectureValue : styles.architecturePending}>{cloudSession ? "Conectada" : pairing ? "Emparejando…" : "Por conectar"}</Text></View>
+              <View style={styles.architectureRow}><Text style={styles.architectureLabel}>CHATGPT · PRUEBA</Text><Text style={codexConnected ? styles.architectureValue : styles.architecturePending}>{codexConnected ? "Conectado" : codexConnecting ? "Esperando autorización…" : "Desconectado"}</Text></View>
             </View>
             <Text style={styles.profileFootnote}>{cloudSession ? `${cloudWardrobe.length ? `${cloudWardrobe.length} prendas reales sincronizadas. ` : ""}Las credenciales de este dispositivo están guardadas en el llavero seguro del sistema.` : "Abre la web privada de Vesta en este teléfono y toca “Emparejar app nativa”. El enlace dura diez minutos."}</Text>
             {cloudSession && <Pressable style={styles.secondaryButton} onPress={() => loadWardrobe()} disabled={wardrobeLoading}><Text style={styles.secondaryButtonText}>{wardrobeLoading ? "Sincronizando…" : "Sincronizar armario"}</Text></Pressable>}
             {!cloudSession && <Pressable style={styles.fullButton} onPress={pairFromClipboard} disabled={pairing}><Text style={styles.fullButtonText}>{pairing ? "Emparejando…" : "Pegar enlace de emparejamiento"}</Text></Pressable>}
             {cloudSession && <Pressable onPress={disconnectCloud}><Text style={styles.deleteText}>Desconectar este teléfono</Text></Pressable>}
+            <Text style={styles.experimentalNote}>MODO PERSONAL EXPERIMENTAL · Usa tu suscripción solo para analizar fotos. Los tokens permanecen en este iPhone.</Text>
+            {!codexConnected && <Pressable style={[styles.fullButton, styles.experimentalButton, codexConnecting && styles.disabledButton]} onPress={connectCodexExperiment} disabled={codexConnecting}><Text style={styles.fullButtonText}>{codexConnecting ? "Esperando autorización…" : "Continuar con ChatGPT · prueba"}</Text></Pressable>}
+            {codexConnected && <Pressable style={[styles.secondaryButton, styles.experimentalButton]} onPress={disconnectCodexExperiment}><Text style={styles.secondaryButtonText}>Cerrar sesión experimental</Text></Pressable>}
           </View>
         </View>
       </Modal>
@@ -873,6 +982,8 @@ const styles = StyleSheet.create({
   architectureValue: { color: "#60705B", fontSize: 10, fontWeight: "700" },
   architecturePending: { color: rust, fontSize: 10, fontWeight: "700" },
   profileFootnote: { color: muted, textAlign: "center", fontSize: 9, lineHeight: 14, marginTop: 18 },
+  experimentalNote: { color: rust, textAlign: "center", fontSize: 7, lineHeight: 12, fontWeight: "800", letterSpacing: 0.45, marginTop: 18, marginBottom: 10 },
+  experimentalButton: { marginTop: 0 },
   detailBackdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(22,20,17,.45)" },
   detailSheet: { maxHeight: "90%", overflow: "hidden", backgroundColor: paper, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
   detailCopy: { padding: 22, paddingBottom: 34 },

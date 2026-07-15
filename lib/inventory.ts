@@ -7,7 +7,7 @@ import { garmentPreviewKey, getMediaBucket, normalizedPhotoKey } from "@/lib/sto
 type SourcePhoto = typeof sourcePhotos.$inferSelect;
 export type ProcessingMode = "economy" | "quality";
 
-type InventoryCandidate = {
+export type InventoryCandidate = {
   candidate_key: string;
   name: string;
   category: string;
@@ -23,7 +23,7 @@ type InventoryCandidate = {
   }>;
 };
 
-type InventoryResult = { garments: InventoryCandidate[] };
+export type InventoryResult = { garments: InventoryCandidate[] };
 
 export type InventoryRun = {
   garmentCount: number;
@@ -142,6 +142,26 @@ export async function runInventory(ownerId: string, batchId: string, photos: Sou
     eq(sourcePhotos.batchId, batchId),
   ));
   return { garmentCount, inputTokens, outputTokens, model, rawResults };
+}
+
+export async function persistExperimentalInventory(
+  ownerId: string,
+  batchId: string,
+  photos: SourcePhoto[],
+  rawResults: InventoryResult[],
+) {
+  for (const photo of photos) await normalizePhoto(ownerId, batchId, photo);
+  const garmentCount = await persistCandidates(
+    ownerId,
+    batchId,
+    rawResults,
+    new Map(photos.map((photo) => [photo.id, photo])),
+  );
+  await getDb().update(sourcePhotos).set({ status: "analyzed" }).where(and(
+    eq(sourcePhotos.ownerId, ownerId),
+    eq(sourcePhotos.batchId, batchId),
+  ));
+  return garmentCount;
 }
 
 async function normalizePhoto(ownerId: string, batchId: string, photo: SourcePhoto) {
