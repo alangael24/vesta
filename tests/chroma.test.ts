@@ -81,6 +81,25 @@ test("white details enclosed by a garment are preserved", () => {
   assert.equal(output.data[(5 * width + 5) * 4 + 3], 255, "an enclosed white logo is not erased");
 });
 
+test("an off-white garment on a white background remains opaque", () => {
+  const width = 16;
+  const height = 16;
+  const rgba = new Uint8Array(width * height * 4).fill(255);
+  for (let y = 3; y < 13; y += 1) {
+    for (let x = 3; x < 13; x += 1) {
+      const offset = (y * width + x) * 4;
+      rgba[offset] = 238;
+      rgba[offset + 1] = 235;
+      rgba[offset + 2] = 231;
+    }
+  }
+  const result = removeLightBackground(encode({ width, height, data: rgba, channels: 4, depth: 8 }), "image/png");
+  assert.ok(result?.applied);
+  const output = decode(result.png);
+  assert.equal(output.data[3], 0, "the pure-white background becomes transparent");
+  assert.equal(output.data[(8 * width + 8) * 4 + 3], 255, "the off-white garment remains opaque");
+});
+
 test("JPEG retailer references use the same deterministic background removal", () => {
   const width = 16;
   const height = 16;

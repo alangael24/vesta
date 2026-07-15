@@ -18,6 +18,8 @@ export type LightBackgroundResult = {
 };
 
 const maximumPixels = 24_000_000;
+const lightBackgroundTraversalDistance = 30;
+const lightBackgroundFeatherStart = 6;
 
 /**
  * Removes only a light, low-saturation background connected to the image edge.
@@ -163,7 +165,7 @@ function floodLightBackground(rgba: Uint8Array, width: number, height: number, b
     const offset = pixel * 4;
     const originalAlpha = rgba[offset + 3];
     const distance = colorDistance(rgba[offset], rgba[offset + 1], rgba[offset + 2], background);
-    const opacity = smoothstep(13, 62, distance);
+    const opacity = smoothstep(lightBackgroundFeatherStart, lightBackgroundTraversalDistance, distance);
     const alpha = Math.round(originalAlpha * opacity);
     if (alpha > 0 && alpha < originalAlpha) {
       const normalized = alpha / 255;
@@ -183,7 +185,9 @@ function isLightBackgroundPixel(rgba: Uint8Array, pixel: number, background: [nu
   const blue = rgba[offset + 2];
   const luminance = (red * 299 + green * 587 + blue * 114) / 1_000;
   const chroma = Math.max(red, green, blue) - Math.min(red, green, blue);
-  return luminance >= 174 && chroma <= 86 && colorDistance(red, green, blue, background) <= 70;
+  return luminance >= 174
+    && chroma <= 86
+    && colorDistance(red, green, blue, background) <= lightBackgroundTraversalDistance;
 }
 
 function colorDistance(red: number, green: number, blue: number, target: [number, number, number]) {
