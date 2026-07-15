@@ -144,6 +144,7 @@ function tryOnSignatureFor(layers: TryOnLayer[]) {
 }
 
 const wardrobeSprite = require("./assets/wardrobe-sprite.png") as ImageSourcePropType;
+const legacyAlanAvatar = require("./assets/alan-avatar-base.png") as ImageSourcePropType;
 
 const filters: { id: Category; label: string }[] = [
   { id: "all", label: "Todo" },
@@ -373,6 +374,7 @@ export default function App() {
   const automaticCloudConnectionStarted = useRef(false);
   const pendingAnalysisOffered = useRef(false);
   const avatarOnboardingOffered = useRef(false);
+  const legacyAvatarMigrationStarted = useRef(false);
 
   const activeWardrobe = cloudWardrobe;
 
@@ -479,6 +481,7 @@ export default function App() {
       setLocalAvatarUri(null);
       tryOnAvatarBase64.current = null;
       avatarOnboardingOffered.current = false;
+      legacyAvatarMigrationStarted.current = false;
       return;
     }
     Promise.all([loadWardrobe(cloudSession), loadOutfits(cloudSession), loadAvatar(cloudSession)]).catch(() => undefined);
@@ -545,8 +548,12 @@ export default function App() {
     }
     const response = await cloudFetch(session, "/api/v1/avatar", { method: "GET" });
     if (!response.ok) return;
-    const result = await response.json() as { avatar?: CloudAvatar | null };
+    const result = await response.json() as { avatar?: CloudAvatar | null; legacyAvatarEligible?: boolean };
     if (!result.avatar) {
+      if (result.legacyAvatarEligible) {
+        await restoreLegacyAvatar(session, cachedPath);
+        return;
+      }
       setCloudAvatar(null);
       setLocalAvatarUri(null);
       tryOnAvatarBase64.current = null;
@@ -573,6 +580,27 @@ export default function App() {
     await FileSystem.moveAsync({ from: nextPath, to: cachedPath });
     setLocalAvatarUri(cachedPath);
     tryOnAvatarBase64.current = null;
+  }
+
+  async function restoreLegacyAvatar(session: CloudSession, cachedPath: string | null) {
+    if (legacyAvatarMigrationStarted.current) return;
+    legacyAvatarMigrationStarted.current = true;
+    const bundledAvatar = Image.resolveAssetSource(legacyAlanAvatar);
+    setAvatarOpen(false);
+    setLocalAvatarUri(bundledAvatar.uri);
+    try {
+      const base64 = await FileSystem.readAsStringAsync(bundledAvatar.uri, { encoding: FileSystem.EncodingType.Base64 });
+      tryOnAvatarBase64.current = base64;
+      const avatar = await uploadAccountAvatar(session, base64);
+      if (cachedPath) {
+        await FileSystem.writeAsStringAsync(cachedPath, base64, { encoding: FileSystem.EncodingType.Base64 });
+        setLocalAvatarUri(cachedPath);
+      }
+      setCloudAvatar(avatar);
+    } catch {
+      // Keep the bundled avatar visible and retry the private upload on the next sync.
+      legacyAvatarMigrationStarted.current = false;
+    }
   }
 
   async function cacheOutfitRenders(session: CloudSession, values: Outfit[]) {

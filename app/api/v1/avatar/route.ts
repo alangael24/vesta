@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { users } from "@/db/schema";
+import { needsLegacyAvatarRestore } from "@/lib/avatar-migration";
 import { requireDevice } from "@/lib/device-auth";
 import { getMediaBucket, ownerAvatarKey } from "@/lib/storage";
 
@@ -15,6 +16,7 @@ export async function GET(request: Request) {
     avatarUpdatedAt: users.avatarUpdatedAt,
   }).from(users).where(eq(users.id, identity.ownerId)).limit(1);
   return Response.json({
+    legacyAvatarEligible: needsLegacyAvatarRestore(identity.ownerId, owner),
     avatar: owner?.avatarKey && owner.avatarVersion ? {
       mediaPath: `/api/v1/media/avatar?v=${encodeURIComponent(owner.avatarVersion)}`,
       version: owner.avatarVersion,
@@ -81,7 +83,8 @@ export async function DELETE(request: Request) {
   await db.update(users).set({
     avatarKey: null,
     avatarVersion: null,
-    avatarUpdatedAt: null,
+    // Keep a tombstone so a deliberately deleted legacy avatar is not restored again.
+    avatarUpdatedAt: now,
     updatedAt: now,
   }).where(eq(users.id, identity.ownerId));
   if (owner.avatarKey) await getMediaBucket().delete(owner.avatarKey).catch(() => undefined);
