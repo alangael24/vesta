@@ -28,6 +28,9 @@ type ManualDeletePayload = {
 
 export async function PUT(request: Request) {
   if (!authorized(request)) return notFound();
+  if (request.headers.get("content-type")?.toLowerCase().includes("application/json")) {
+    return deleteGarments(request);
+  }
 
   const form = await request.formData();
   const email = String(form.get("email") || "").trim().toLowerCase();
@@ -141,7 +144,10 @@ export async function PUT(request: Request) {
 
 export async function POST(request: Request) {
   if (!authorized(request)) return notFound();
+  return deleteGarments(request);
+}
 
+async function deleteGarments(request: Request) {
   const payload = await safeJson(request);
   const email = payload?.email?.trim().toLowerCase();
   const garmentIds = Array.from(new Set(payload?.garmentIds?.filter((value) => typeof value === "string") || [])).slice(0, 100);
