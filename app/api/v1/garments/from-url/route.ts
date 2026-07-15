@@ -3,6 +3,7 @@ import { getDb } from "@/db";
 import { garments } from "@/db/schema";
 import { requireDevice } from "@/lib/device-auth";
 import { hashSecret } from "@/lib/crypto";
+import { removeLightBackground } from "@/lib/light-background";
 import {
   canonicalizeProductUrl,
   classifyInternetGarment,
@@ -75,6 +76,19 @@ export async function POST(request: Request) {
       imageType = fetchedImage.type;
     }
 
+    const cleanup = safelyRemoveLightBackground(imageBytes, imageType);
+    const hasTransparentAsset = Boolean(cleanup && (cleanup.applied || cleanup.hadTransparency));
+    if (hasTransparentAsset && cleanup) {
+      imageBytes = cleanup.png;
+      imageType = "image/png";
+    }
+    const transparentPixelRatio = hasTransparentAsset ? cleanup?.stats.transparentPixelRatio || 0 : 0;
+    const reconstructionModel = cleanup?.applied
+      ? "retailer-product-reference+edge-cleanup"
+      : "retailer-product-reference";
+    const cleanupSummary = cleanup?.applied
+      ? "Referencia web importada y fondo claro eliminado localmente, sin IA."
+      : "Referencia de producto importada desde su página pública.";
     const classification = classifyInternetGarment(title, productUrl, placement);
     const garmentId = `garment_${crypto.randomUUID()}`;
     const key = internetGarmentKey(identity.ownerId, garmentId);
@@ -86,7 +100,8 @@ export async function POST(request: Request) {
         garmentId,
         sourceHost: productUrl.hostname,
         sourceImageHost: imageUrl.hostname,
-        purpose: "private-internet-garment-reference",
+        purpose: cleanup?.applied ? "private-internet-garment-transparent-cutout" : "private-internet-garment-reference",
+        backgroundRemoval: cleanup?.applied ? "edge-connected-light-v1" : "not-applied",
       },
     });
     try {
@@ -106,13 +121,13 @@ export async function POST(request: Request) {
         isBasic: false,
         fingerprint: `internet|${await hashSecret(productUrl.toString())}`,
         cutoutKey: key,
-        reconstructionModel: "retailer-product-reference",
+        reconstructionModel,
         reconstructionQuality: "final",
         reconstructionApprovedAt: now,
         reconstructedAt: now,
-        transparentPixelRatio: 0,
+        transparentPixelRatio,
         qaStatus: "pass",
-        qaJson: JSON.stringify({ visual: { summary: "Referencia de producto importada desde su página pública.", issues: [] } }),
+        qaJson: JSON.stringify({ visual: { summary: cleanupSummary, issues: [] }, technical: cleanup?.stats || null }),
         status: "approved",
         createdAt: now,
         updatedAt: now,
@@ -137,9 +152,9 @@ export async function POST(request: Request) {
         isBasic: false,
         status: "approved",
         reconstructionQuality: "final",
-        transparentPixelRatio: 0,
+        transparentPixelRatio,
         qaStatus: "pass",
-        qaJson: JSON.stringify({ visual: { summary: "Referencia de producto importada desde su página pública.", issues: [] } }),
+        qaJson: JSON.stringify({ visual: { summary: cleanupSummary, issues: [] }, technical: cleanup?.stats || null }),
         cutoutKey: key,
       }),
     }, { status: 201, headers: privateHeaders() });
@@ -236,7 +251,8 @@ async function fetchFirstUsableImage(candidates: URL[], referer: URL) {
   for (const url of candidates.slice(0, 8)) {
     if (!isSafeRemoteUrl(url)) continue;
     try {
-      const result = await fetchRemote(url, "image/webp,image/png,image/jpeg,image/*;q=0.7", referer);
+      // Prefer formats we can decode deterministically in the Worker for background removal.
+      const result = await fetchRemote(url, "image/png,image/jpeg,image/webp;q=0.8,image/*;q=0.7", referer);
       const declaredType = normalizedContentType(result.response.headers.get("content-type"));
       if (declaredType.startsWith("image/") && !supportedDeclaredImageTypes.has(declaredType)) {
         await result.response.body?.cancel().catch(() => undefined);
@@ -266,6 +282,15 @@ function supportedImageType(bytes: Uint8Array) {
     && String.fromCharCode(...bytes.slice(0, 4)) === "RIFF"
     && String.fromCharCode(...bytes.slice(8, 12)) === "WEBP") return "image/webp";
   return null;
+}
+
+function safelyRemoveLightBackground(bytes: Uint8Array, contentType: string) {
+  try {
+    return removeLightBackground(bytes, contentType);
+  } catch {
+    // A retailer reference remains useful if its codec or dimensions cannot be processed locally.
+    return null;
+  }
 }
 
 async function readLimited(response: Response, maximumBytes: number, errorCode: string) {
