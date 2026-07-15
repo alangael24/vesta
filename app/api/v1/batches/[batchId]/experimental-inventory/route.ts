@@ -14,6 +14,19 @@ type ExperimentalPayload = {
   model?: string;
   consent?: boolean;
   results?: unknown;
+  usage?: unknown;
+};
+
+type ExperimentalUsage = {
+  photoCount: number;
+  requestCount: number;
+  elapsedMs: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  totalTokens: number;
+  rateLimit?: Record<string, unknown>;
 };
 
 const supportedModels = new Set(["gpt-5.6-luna", "gpt-5.4-mini", "gpt-5.4", "gpt-5.5"]);
@@ -31,7 +44,8 @@ export async function POST(request: Request, context: RouteContext) {
     payload.consent !== true ||
     !payload.model ||
     !supportedModels.has(payload.model) ||
-    !isInventoryResults(payload.results)
+    !isInventoryResults(payload.results) ||
+    !isExperimentalUsage(payload.usage)
   ) {
     return Response.json({ error: "invalid_experimental_inventory" }, { status: 400 });
   }
@@ -98,7 +112,9 @@ export async function POST(request: Request, context: RouteContext) {
         status: "completed",
         progress: 100,
         model: payload.model,
-        resultJson: JSON.stringify({ garmentCount, chunks: payload.results.length, provider: payload.provider }),
+        resultJson: JSON.stringify({ garmentCount, chunks: payload.results.length, provider: payload.provider, usage: payload.usage }),
+        inputTokens: payload.usage.inputTokens,
+        outputTokens: payload.usage.outputTokens,
         completedAt,
         updatedAt: completedAt,
       }).where(eq(processingJobs.id, job.id)),
@@ -115,6 +131,15 @@ export async function POST(request: Request, context: RouteContext) {
     ]);
     return Response.json({ error: code }, { status: 502 });
   }
+}
+
+function isExperimentalUsage(value: unknown): value is ExperimentalUsage {
+  if (!isRecord(value)) return false;
+  const countFields = ["photoCount", "requestCount", "inputTokens", "cachedInputTokens", "outputTokens", "reasoningOutputTokens", "totalTokens"];
+  if (countFields.some((field) => !integerBetween(value[field], 0, 100_000_000))) return false;
+  if (!integerBetween(value.elapsedMs, 0, 86_400_000)) return false;
+  if (value.photoCount < 1 || value.requestCount < 1) return false;
+  return value.rateLimit === undefined || isRecord(value.rateLimit);
 }
 
 function isInventoryResults(value: unknown): value is InventoryResult[] {

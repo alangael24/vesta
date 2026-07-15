@@ -461,7 +461,7 @@ export default function App() {
     setProcessing(true);
     setExperimentalProgress(0);
     try {
-      const results = await analyzeExperimentalInventory(selectedPhotos, (completed, total) => {
+      const analysis = await analyzeExperimentalInventory(selectedPhotos, (completed, total) => {
         setExperimentalProgress(Math.round((completed / total) * 70));
       });
       setExperimentalProgress(82);
@@ -472,7 +472,8 @@ export default function App() {
           provider: "chatgpt-codex-experimental",
           model: EXPERIMENTAL_CODEX_MODEL,
           consent: true,
-          results,
+          results: analysis.results,
+          usage: analysis.usage,
         }),
       });
       const result = await response.json() as { error?: string; garmentCount?: number };
@@ -481,7 +482,7 @@ export default function App() {
       await loadWardrobe(cloudSession);
       Alert.alert(
         "Inventario experimental listo",
-        `Vesta detectó ${result.garmentCount ?? 0} prendas con tu suscripción de ChatGPT. Revísalas: esta modalidad todavía no deduplica ni crea PNG transparentes.`,
+        `Vesta detectó ${result.garmentCount ?? 0} prendas.\n\nConsumo reportado por OpenAI:\n${analysis.usage.totalTokens.toLocaleString()} tokens totales\n${analysis.usage.inputTokens.toLocaleString()} entrada (${analysis.usage.cachedInputTokens.toLocaleString()} en caché)\n${analysis.usage.outputTokens.toLocaleString()} salida (${analysis.usage.reasoningOutputTokens.toLocaleString()} de razonamiento)\n${analysis.usage.requestCount} solicitud(es) · ${analysis.usage.photoCount} foto(s) · ${(analysis.usage.elapsedMs / 1000).toFixed(1)} s\n\nRevísalas: esta modalidad todavía no deduplica ni crea PNG transparentes.`,
       );
     } catch {
       Alert.alert(

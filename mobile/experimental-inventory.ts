@@ -27,6 +27,32 @@ export type ExperimentalInventoryResult = {
   }>;
 };
 
+export type ExperimentalUsage = {
+  photoCount: number;
+  requestCount: number;
+  elapsedMs: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  totalTokens: number;
+  rateLimit?: {
+    primaryUsedPercent?: number;
+    primaryWindowMinutes?: number;
+    primaryResetAt?: number;
+    secondaryUsedPercent?: number;
+    secondaryWindowMinutes?: number;
+    secondaryResetAt?: number;
+    creditBalance?: string;
+    creditsUnlimited?: boolean;
+  };
+};
+
+export type ExperimentalInventoryAnalysis = {
+  results: ExperimentalInventoryResult[];
+  usage: ExperimentalUsage;
+};
+
 const inventorySchema = {
   type: "object",
   additionalProperties: false,
@@ -85,8 +111,19 @@ export async function analyzeExperimentalInventory(
   photos: ExperimentalPhoto[],
   onProgress?: (completed: number, total: number) => void,
 ) {
+  const startedAt = Date.now();
   const chunks = chunk(photos, 4);
   const results: ExperimentalInventoryResult[] = [];
+  const usage: ExperimentalUsage = {
+    photoCount: photos.length,
+    requestCount: chunks.length,
+    elapsedMs: 0,
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    outputTokens: 0,
+    reasoningOutputTokens: 0,
+    totalTokens: 0,
+  };
   for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
     const photoChunk = chunks[chunkIndex];
     const content: Array<Record<string, unknown>> = [{
@@ -114,12 +151,20 @@ export async function analyzeExperimentalInventory(
     });
     const raw = await response.text();
     if (!response.ok) throw new Error(apiError(raw, response.status));
-    const outputText = extractStreamText(raw);
+    const parsed = extractStream(raw);
+    const outputText = parsed.outputText;
     if (!outputText) throw new Error("codex_empty_output");
     results.push(JSON.parse(stripCodeFence(outputText)) as ExperimentalInventoryResult);
+    usage.inputTokens += parsed.usage.inputTokens;
+    usage.cachedInputTokens += parsed.usage.cachedInputTokens;
+    usage.outputTokens += parsed.usage.outputTokens;
+    usage.reasoningOutputTokens += parsed.usage.reasoningOutputTokens;
+    usage.totalTokens += parsed.usage.totalTokens;
+    usage.rateLimit = parsed.rateLimit ?? readRateLimitHeaders(response) ?? usage.rateLimit;
     onProgress?.(chunkIndex + 1, chunks.length);
   }
-  return results;
+  usage.elapsedMs = Date.now() - startedAt;
+  return { results, usage } satisfies ExperimentalInventoryAnalysis;
 }
 
 async function prepareImage(photo: ImagePicker.ImagePickerAsset) {
@@ -139,8 +184,10 @@ async function prepareImage(photo: ImagePicker.ImagePickerAsset) {
   return result.base64;
 }
 
-function extractStreamText(raw: string) {
+function extractStream(raw: string) {
   let output = "";
+  let usage = emptyTokenUsage();
+  let rateLimit: ExperimentalUsage["rateLimit"];
   for (const line of raw.split(/\r?\n/gu)) {
     if (!line.startsWith("data:")) continue;
     const data = line.slice(5).trim();
@@ -149,18 +196,99 @@ function extractStreamText(raw: string) {
       const event = JSON.parse(data) as Record<string, unknown>;
       if (event.type === "response.output_text.delta" && typeof event.delta === "string") output += event.delta;
       if (!output && event.type === "response.output_text.done" && typeof event.text === "string") output = event.text;
-      if (!output && event.type === "response.completed" && event.response) output = extractOutputText(event.response);
+      if (event.type === "response.completed" && event.response) {
+        if (!output) output = extractOutputText(event.response);
+        usage = extractUsage(event.response);
+      }
+      if (event.type === "codex.rate_limits") rateLimit = extractRateLimitEvent(event);
       if (event.type === "error") throw new Error("codex_stream_error");
     } catch (error) {
       if (error instanceof Error && error.message === "codex_stream_error") throw error;
     }
   }
-  if (output) return output;
+  if (output) return { outputText: output, usage, rateLimit };
   try {
-    return extractOutputText(JSON.parse(raw));
+    const response = JSON.parse(raw) as unknown;
+    return { outputText: extractOutputText(response), usage: extractUsage(response), rateLimit };
   } catch {
-    return "";
+    return { outputText: "", usage, rateLimit };
   }
+}
+
+function emptyTokenUsage() {
+  return { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 };
+}
+
+function extractUsage(value: unknown) {
+  if (!value || typeof value !== "object") return emptyTokenUsage();
+  const raw = (value as { usage?: unknown }).usage;
+  if (!raw || typeof raw !== "object") return emptyTokenUsage();
+  const item = raw as Record<string, unknown>;
+  const inputDetails = item.input_tokens_details as Record<string, unknown> | undefined;
+  const outputDetails = item.output_tokens_details as Record<string, unknown> | undefined;
+  return {
+    inputTokens: safeCount(item.input_tokens),
+    cachedInputTokens: safeCount(inputDetails?.cached_tokens),
+    outputTokens: safeCount(item.output_tokens),
+    reasoningOutputTokens: safeCount(outputDetails?.reasoning_tokens),
+    totalTokens: safeCount(item.total_tokens),
+  };
+}
+
+function extractRateLimitEvent(event: Record<string, unknown>): ExperimentalUsage["rateLimit"] {
+  const limits = event.rate_limits as Record<string, unknown> | undefined;
+  const primary = limits?.primary as Record<string, unknown> | undefined;
+  const secondary = limits?.secondary as Record<string, unknown> | undefined;
+  const credits = event.credits as Record<string, unknown> | undefined;
+  return cleanRateLimit({
+    primaryUsedPercent: safeFinite(primary?.used_percent),
+    primaryWindowMinutes: safeFinite(primary?.window_minutes),
+    primaryResetAt: safeFinite(primary?.reset_at),
+    secondaryUsedPercent: safeFinite(secondary?.used_percent),
+    secondaryWindowMinutes: safeFinite(secondary?.window_minutes),
+    secondaryResetAt: safeFinite(secondary?.reset_at),
+    creditBalance: typeof credits?.balance === "string" ? credits.balance : undefined,
+    creditsUnlimited: typeof credits?.unlimited === "boolean" ? credits.unlimited : undefined,
+  });
+}
+
+function readRateLimitHeaders(response: Response): ExperimentalUsage["rateLimit"] {
+  return cleanRateLimit({
+    primaryUsedPercent: headerNumber(response, "x-codex-primary-used-percent"),
+    primaryWindowMinutes: headerNumber(response, "x-codex-primary-window-minutes"),
+    primaryResetAt: headerNumber(response, "x-codex-primary-reset-at"),
+    secondaryUsedPercent: headerNumber(response, "x-codex-secondary-used-percent"),
+    secondaryWindowMinutes: headerNumber(response, "x-codex-secondary-window-minutes"),
+    secondaryResetAt: headerNumber(response, "x-codex-secondary-reset-at"),
+    creditBalance: response.headers.get("x-codex-credits-balance") ?? undefined,
+    creditsUnlimited: headerBoolean(response, "x-codex-credits-unlimited"),
+  });
+}
+
+function cleanRateLimit(value: NonNullable<ExperimentalUsage["rateLimit"]>) {
+  return Object.values(value).some((item) => item !== undefined) ? value : undefined;
+}
+
+function safeCount(value: unknown) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function safeFinite(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function headerNumber(response: Response, name: string) {
+  const value = response.headers.get(name);
+  if (value === null) return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function headerBoolean(response: Response, name: string) {
+  const value = response.headers.get(name)?.toLowerCase();
+  if (value === "true" || value === "1") return true;
+  if (value === "false" || value === "0") return false;
+  return undefined;
 }
 
 function extractOutputText(value: unknown) {
