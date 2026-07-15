@@ -19,6 +19,7 @@ export type ExperimentalInventoryResult = {
     material: string;
     description: string;
     confidence: number;
+    is_basic: boolean;
     visibility: "clear" | "partial" | "held";
     evidence: Array<{
       photo_id: string;
@@ -73,6 +74,7 @@ const inventorySchema = {
           material: { type: "string" },
           description: { type: "string" },
           confidence: { type: "integer", minimum: 0, maximum: 100 },
+          is_basic: { type: "boolean" },
           visibility: { type: "string", enum: ["clear", "partial", "held"] },
           evidence: {
             type: "array",
@@ -98,7 +100,7 @@ const inventorySchema = {
             },
           },
         },
-        required: ["candidate_key", "name", "category", "type", "color", "material", "description", "confidence", "visibility", "evidence"],
+        required: ["candidate_key", "name", "category", "type", "color", "material", "description", "confidence", "is_basic", "visibility", "evidence"],
       },
     },
   },
@@ -106,8 +108,11 @@ const inventorySchema = {
 } as const;
 
 const instructions = `You are the evidence-bound inventory stage of Vesta, a private personal wardrobe app.
-Identify only distinct wearable items visibly supported by the supplied photos. Group repeated views of the same physical item within this request into one candidate with multiple evidence entries. Do not invent hidden details, brands, logos, materials, colors, or garment structure. Omit people, furniture, luggage, and background objects. Accessories and footwear count when clearly visible.
-Bounding boxes use integer coordinates from 0 to 1000 relative to each full image. Each box must tightly cover the visible garment. Use visibility=held when an item is too occluded, folded, tiny, or uncertain to reconstruct faithfully. Confidence is evidence quality, not aesthetic quality. Write short Spanish names and descriptions.`;
+Optimize for precision, not recall: a missed item is better than a false item. Identify only distinct physical garments whose own silhouette and garment body are clearly visible and reconstruction-ready. Return only candidates with visibility=clear and confidence at least 85; omit every uncertain, partial, held, tiny, or heavily occluded item instead of returning it.
+Treat a zipped or closed outer layer as one garment. Never infer a shirt, logo garment, or other layer underneath from a small opening, collar fragment, logo, color patch, or fabric fragment. A logo visible on an outer garment belongs to that outer garment unless a separate underlying garment body and silhouette are independently visible. Never infer a bag from a strap alone; an accessory requires the actual accessory body to be clearly visible. Omit people, phones, furniture, luggage, and background objects.
+Group repeated views of the same physical item within this request into one candidate with multiple evidence entries. Do not invent hidden details, brands, logos, materials, colors, or garment structure.
+Set is_basic=true only for a plain, solid-color T-shirt, tank, or simple long-sleeve top with no visible logo, print, pattern, special trim, unusual cut, or other identity-bearing detail. Basic items remain inventory records but must not trigger catalog-image generation.
+Bounding boxes use integer coordinates from 0 to 1000 relative to each full image. Each box must tightly cover the visible garment body and its visible silhouette. Confidence is evidence quality, not aesthetic quality. Write short Spanish names and descriptions.`;
 
 export async function analyzeExperimentalInventory(
   photos: ExperimentalPhoto[],
@@ -173,8 +178,9 @@ export async function generateExperimentalGarmentImage(
   photo: ExperimentalPhoto,
   garment: ExperimentalGarmentCandidate,
 ) {
-  const image = await prepareImage(photo.asset);
-  const prompt = `Create a clean ecommerce catalog image of only the target garment visibly supported by the reference: ${garment.name}; type: ${garment.type}; color: ${garment.color || "unknown"}. Remove the person, body, face, hands, phone, room, background, text, interface, and every other object. Reconstruct only this physical garment faithfully, front view, centered, white background, no mannequin, no body, no hanger, no logo, no invented graphics, patterns, seams, pockets, or branding. Preserve only details visibly supported by the reference.`;
+  const evidence = garment.evidence.find((item) => item.photo_id === photo.id) ?? garment.evidence[0];
+  const image = await prepareGarmentEvidence(photo.asset, evidence?.bbox);
+  const prompt = `Create a clean ecommerce catalog image of only the target garment visibly supported by the reference: ${garment.name}; type: ${garment.type}; color: ${garment.color || "unknown"}. Remove the person, body, face, hands, phone, room, background, interface, and every other object. Reconstruct only this physical garment faithfully, front view, centered, white background, no mannequin, no body, and no hanger. Preserve garment-attached logos, graphics, text, patterns, seams, pockets, and branding only when they are clearly visible on the target garment; never invent, move, replace, or alter them. Preserve only details visibly supported by the reference.`;
   const response = await codexImageEdit({
     images: [{ image_url: `data:image/jpeg;base64,${image}` }],
     prompt,
@@ -188,6 +194,34 @@ export async function generateExperimentalGarmentImage(
   const result = payload.data?.[0]?.b64_json;
   if (!result) throw new Error("image_edit_empty");
   return result;
+}
+
+async function prepareGarmentEvidence(
+  photo: ImagePicker.ImagePickerAsset,
+  bbox?: { x: number; y: number; width: number; height: number },
+) {
+  if (!bbox || !photo.width || !photo.height) return prepareImage(photo);
+  const padding = 0.08;
+  const left = Math.max(0, (bbox.x / 1000) - (bbox.width / 1000) * padding);
+  const top = Math.max(0, (bbox.y / 1000) - (bbox.height / 1000) * padding);
+  const right = Math.min(1, ((bbox.x + bbox.width) / 1000) + (bbox.width / 1000) * padding);
+  const bottom = Math.min(1, ((bbox.y + bbox.height) / 1000) + (bbox.height / 1000) * padding);
+  const originX = Math.max(0, Math.floor(left * photo.width));
+  const originY = Math.max(0, Math.floor(top * photo.height));
+  const width = Math.max(1, Math.min(photo.width - originX, Math.ceil((right - left) * photo.width)));
+  const height = Math.max(1, Math.min(photo.height - originY, Math.ceil((bottom - top) * photo.height)));
+  const maximumDimension = 1600;
+  const actions: ImageManipulator.Action[] = [{ crop: { originX, originY, width, height } }];
+  if (width > maximumDimension || height > maximumDimension) {
+    actions.push(width >= height ? { resize: { width: maximumDimension } } : { resize: { height: maximumDimension } });
+  }
+  const result = await ImageManipulator.manipulateAsync(photo.uri, actions, {
+    base64: true,
+    compress: 0.88,
+    format: ImageManipulator.SaveFormat.JPEG,
+  });
+  if (!result.base64) throw new Error("photo_conversion_failed");
+  return result.base64;
 }
 
 async function prepareImage(photo: ImagePicker.ImagePickerAsset) {

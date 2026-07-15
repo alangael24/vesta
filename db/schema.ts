@@ -105,6 +105,7 @@ export const garments = sqliteTable("garments", {
   material: text("material"),
   description: text("description"),
   confidence: integer("confidence"),
+  isBasic: integer("is_basic", { mode: "boolean" }).notNull().default(false),
   fingerprint: text("fingerprint"),
   duplicateOfId: text("duplicate_of_id"),
   dedupConfidence: integer("dedup_confidence"),

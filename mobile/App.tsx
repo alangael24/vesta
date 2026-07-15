@@ -49,6 +49,7 @@ type WardrobeItem = {
   material?: string;
   description?: string;
   confidence?: number | null;
+  isBasic?: boolean;
   status?: string;
   reconstructionQuality?: "draft" | "final" | null;
   transparentPixelRatio?: number | null;
@@ -83,6 +84,7 @@ type CloudGarment = {
   material?: string;
   description?: string;
   confidence?: number | null;
+  isBasic?: boolean;
   status?: string;
   reconstructionQuality?: "draft" | "final" | null;
   transparentPixelRatio?: number | null;
@@ -579,13 +581,19 @@ export default function App() {
       const photosById = new Map(selectedPhotos.map((photo) => [photo.id, photo]));
       const eligible = (result.garments || []).filter((item) => {
         const candidate = candidates.get(item.candidateKey);
-        return candidate && candidate.visibility !== "held" && candidate.evidence.length > 0;
+        return candidate && candidate.visibility === "clear" && candidate.confidence >= 85 && !candidate.is_basic && candidate.evidence.length > 0;
       });
+      const basicCount = (result.garments || []).filter((item) => candidates.get(item.candidateKey)?.is_basic).length;
       let generatedCount = 0;
       for (let index = 0; index < eligible.length; index += 1) {
         const persisted = eligible[index];
         const candidate = candidates.get(persisted.candidateKey)!;
-        const photo = photosById.get(candidate.evidence[0].photo_id);
+        const evidence = candidate.evidence.reduce((best, item) => {
+          const area = item.bbox.width * item.bbox.height;
+          const bestArea = best.bbox.width * best.bbox.height;
+          return area > bestArea ? item : best;
+        });
+        const photo = photosById.get(evidence.photo_id);
         if (!photo) continue;
         try {
           const image = await generateExperimentalGarmentImage(photo, candidate);
@@ -600,7 +608,7 @@ export default function App() {
       await loadWardrobe(cloudSession);
       Alert.alert(
         "Inventario experimental listo",
-        `Vesta detectó ${result.garmentCount ?? 0} prendas y creó ${generatedCount} imagen(es) de catálogo con tu suscripción de ChatGPT. Revísalas antes de aprobarlas.`,
+        `Vesta detectó ${result.garmentCount ?? 0} prendas, creó ${generatedCount} imagen(es) de catálogo y evitó ${basicCount} generación(es) de básicos. Revísalas antes de aprobarlas.`,
       );
     } catch (error) {
       const detail = error instanceof Error ? error.message : "unknown";
@@ -640,6 +648,10 @@ export default function App() {
   };
 
   const chooseReconstruction = (item: WardrobeItem) => {
+    if (item.isBasic) {
+      Alert.alert("Básico reconocido", "Vesta conservará la foto real de esta prenda y no gastará una generación de ImageGen.");
+      return;
+    }
     if (codexConnected && item.evidencePath) {
       Alert.alert(
         "Crear imagen de catálogo",
@@ -689,6 +701,7 @@ export default function App() {
             material: item.material || "",
             description: item.description || "",
             confidence: item.confidence || 70,
+            is_basic: false,
             visibility: "clear",
             evidence: [{ photo_id: `evidence-${item.id}`, bbox: { x: 0, y: 0, width: 1000, height: 1000 } }],
           },
@@ -990,7 +1003,8 @@ export default function App() {
                 <Text style={styles.detailTitle}>{selectedItem.name}</Text>
                 <Text style={styles.detailIntro}>{selectedItem.description || (selectedItem.imagePath ? `Detectada con ${selectedItem.confidence ?? 0}% de confianza. La vista actual muestra la foto de evidencia hasta generar el recorte transparente.` : "Muestra visual del armario. Esta ficha será reemplazada por la prenda extraída de tus fotos.")}</Text>
                 {selectedItem.qaSummary?.summary && <Text style={styles.qaSummary}>{selectedItem.qaSummary.summary}</Text>}
-                {selectedItem.imagePath && (
+                {selectedItem.isBasic && <Text style={styles.qaSummary}>Básico reconocido · se conserva la evidencia y no se usa ImageGen.</Text>}
+                {selectedItem.imagePath && !selectedItem.isBasic && (
                   <Pressable style={[styles.fullButton, styles.reconstructAction, reconstructingId === selectedItem.id && styles.disabledButton]} onPress={() => chooseReconstruction(selectedItem)} disabled={reconstructingId === selectedItem.id}>
                     <Text style={styles.fullButtonText}>{reconstructingId === selectedItem.id ? "Creando y verificando…" : selectedItem.status === "approved" ? "Regenerar PNG" : "Crear PNG transparente"}</Text>
                   </Pressable>

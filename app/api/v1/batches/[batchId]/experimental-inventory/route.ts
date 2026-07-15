@@ -157,6 +157,7 @@ function isInventoryResults(value: unknown): value is InventoryResult[] {
       if (!shortString(garment.type, 80) || !boundedString(garment.color, 80)) return false;
       if (!boundedString(garment.material, 80) || !boundedString(garment.description, 500)) return false;
       if (!integerBetween(garment.confidence, 0, 100)) return false;
+      if (typeof garment.is_basic !== "boolean") return false;
       if (!shortString(garment.visibility, 16) || !visibilities.has(garment.visibility)) return false;
       if (!Array.isArray(garment.evidence) || garment.evidence.length < 1 || garment.evidence.length > 40) return false;
       for (const evidence of garment.evidence) {

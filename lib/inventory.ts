@@ -3,6 +3,7 @@ import { getDb } from "@/db";
 import { garmentEvidence, garments, sourcePhotos } from "@/db/schema";
 import { arrayBufferToBase64, extractOutputText, getImagesBinding, getOpenAIKey, OpenAIResponse } from "@/lib/openai";
 import { garmentPreviewKey, getMediaBucket, normalizedPhotoKey } from "@/lib/storage";
+import { isHighPrecisionCandidate } from "@/lib/inventory-precision";
 
 type SourcePhoto = typeof sourcePhotos.$inferSelect;
 export type ProcessingMode = "economy" | "quality";
@@ -16,6 +17,7 @@ export type InventoryCandidate = {
   material: string;
   description: string;
   confidence: number;
+  is_basic: boolean;
   visibility: "clear" | "partial" | "held";
   evidence: Array<{
     photo_id: string;
@@ -59,6 +61,7 @@ const inventorySchema = {
           material: { type: "string" },
           description: { type: "string" },
           confidence: { type: "integer", minimum: 0, maximum: 100 },
+          is_basic: { type: "boolean" },
           visibility: { type: "string", enum: ["clear", "partial", "held"] },
           evidence: {
             type: "array",
@@ -84,7 +87,7 @@ const inventorySchema = {
             },
           },
         },
-        required: ["candidate_key", "name", "category", "type", "color", "material", "description", "confidence", "visibility", "evidence"],
+        required: ["candidate_key", "name", "category", "type", "color", "material", "description", "confidence", "is_basic", "visibility", "evidence"],
       },
     },
   },
@@ -92,8 +95,11 @@ const inventorySchema = {
 } as const;
 
 const systemPrompt = `You are the evidence-bound inventory stage of Vesta, a private personal wardrobe app.
-Identify only distinct wearable items that are visibly supported by the supplied photos. Group repeated views of the same physical item within this request into one candidate with multiple evidence entries. Do not invent hidden details, brands, logos, materials, colors, or garment structure. Omit people, furniture, bags used only as luggage, and background objects. Accessories and footwear count when clearly visible.
-Bounding boxes use integer coordinates from 0 to 1000 relative to each full image. Each box must tightly cover the visible garment. Use visibility=held when an item is too occluded, folded, tiny, or uncertain to reconstruct faithfully. Confidence is evidence quality, not aesthetic quality. Write short Spanish names and descriptions.`;
+Optimize for precision, not recall: a missed item is better than a false item. Identify only distinct physical garments whose own silhouette and garment body are clearly visible and reconstruction-ready. Return only candidates with visibility=clear and confidence at least 85; omit every uncertain, partial, held, tiny, or heavily occluded item instead of returning it.
+Treat a zipped or closed outer layer as one garment. Never infer a shirt, logo garment, or other layer underneath from a small opening, collar fragment, logo, color patch, or fabric fragment. A logo visible on an outer garment belongs to that outer garment unless a separate underlying garment body and silhouette are independently visible. Never infer a bag from a strap alone; an accessory requires the actual accessory body to be clearly visible. Omit people, phones, furniture, luggage, and background objects.
+Group repeated views of the same physical item within this request into one candidate with multiple evidence entries. Do not invent hidden details, brands, logos, materials, colors, or garment structure.
+Set is_basic=true only for a plain, solid-color T-shirt, tank, or simple long-sleeve top with no visible logo, print, pattern, special trim, unusual cut, or other identity-bearing detail. Basic items remain inventory records but must not trigger catalog-image generation.
+Bounding boxes use integer coordinates from 0 to 1000 relative to each full image. Each box must tightly cover the visible garment body and its visible silhouette. Confidence is evidence quality, not aesthetic quality. Write short Spanish names and descriptions.`;
 
 export async function runInventory(ownerId: string, batchId: string, photos: SourcePhoto[], mode: ProcessingMode): Promise<InventoryRun> {
   const apiKey = getOpenAIKey();
@@ -198,6 +204,7 @@ async function persistCandidates(ownerId: string, batchId: string, results: Inve
   const persistedGarments: PersistedInventoryCandidate[] = [];
   for (const result of results) {
     for (const candidate of result.garments) {
+      if (!isHighPrecisionCandidate(candidate)) continue;
       const evidence = candidate.evidence.filter((item) => photosById.has(item.photo_id));
       if (!evidence.length) continue;
       const fingerprint = fingerprintFor(candidate);
@@ -222,9 +229,10 @@ async function persistCandidates(ownerId: string, batchId: string, results: Inve
         material: candidate.material.slice(0, 80),
         description: candidate.description.slice(0, 500),
         confidence: clamp(candidate.confidence, 0, 100),
+        isBasic: candidate.is_basic,
         fingerprint,
         previewKey,
-        status: candidate.visibility === "held" || candidate.confidence < 55 ? "held" : "candidate",
+        status: "candidate",
         createdAt: now,
         updatedAt: now,
       });

@@ -1,0 +1,1 @@
+ALTER TABLE `garments` ADD `is_basic` integer DEFAULT false NOT NULL;
