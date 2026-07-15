@@ -38,7 +38,8 @@ import {
   generateExperimentalAvatarImage,
   generateExperimentalGarmentImage,
   generateExperimentalTryOnImage,
-  prepareInternetTryOnReference,
+  prepareAvatarTryOnReference,
+  prepareTryOnGarmentReference,
 } from "./experimental-inventory";
 
 type ViewName = "closet" | "builder" | "looks";
@@ -87,6 +88,26 @@ type TryOnLayer = {
 
 type TryOnRenderQuality = "low" | "medium";
 type ProductPlacementHint = "auto" | "head" | "top" | "outer" | "legs" | "feet";
+
+type AvatarGenerationAudit = {
+  recordedAt: string;
+  flow: "builder" | "saved_look";
+  status: "completed";
+  quality: TryOnRenderQuality;
+  garmentCount: number;
+  garmentCacheHits: number;
+  garmentCacheMisses: number;
+  requestedSize: string;
+  avatarInputBytes: number;
+  garmentInputBytes: number;
+  outputBytes: number;
+  avatarPreparationMs: number;
+  garmentPreparationMs: number;
+  generationRoundTripMs: number;
+  cloudUploadMs: number;
+  localSaveMs: number;
+  totalMs: number;
+};
 
 type BodyRegion = "head" | "torso" | "legs" | "feet";
 type FittingSlot = "head" | "top" | "outer" | "legs" | "feet" | "accessory";
@@ -620,7 +641,7 @@ export default function App() {
     setLocalAvatarUri(bundledAvatar.uri);
     try {
       const base64 = await FileSystem.readAsStringAsync(bundledAvatar.uri, { encoding: FileSystem.EncodingType.Base64 });
-      tryOnAvatarBase64.current = base64;
+      tryOnAvatarBase64.current = await prepareAvatarTryOnReference(bundledAvatar.uri);
       const avatar = await uploadAccountAvatar(session, base64);
       if (cachedPath) {
         await FileSystem.writeAsStringAsync(cachedPath, base64, { encoding: FileSystem.EncodingType.Base64 });
@@ -660,7 +681,7 @@ export default function App() {
     if (localPath) {
       const info = await FileSystem.getInfoAsync(localPath).catch(() => null);
       if (info?.exists) {
-        tryOnAvatarBase64.current = await FileSystem.readAsStringAsync(localPath, { encoding: FileSystem.EncodingType.Base64 });
+        tryOnAvatarBase64.current = await prepareAvatarTryOnReference(localPath);
         return tryOnAvatarBase64.current;
       }
     }
@@ -674,7 +695,7 @@ export default function App() {
     });
     if (download.status < 200 || download.status >= 300) throw new Error(`avatar_download_${download.status}`);
     setLocalAvatarUri(localPath);
-    tryOnAvatarBase64.current = await FileSystem.readAsStringAsync(localPath, { encoding: FileSystem.EncodingType.Base64 });
+    tryOnAvatarBase64.current = await prepareAvatarTryOnReference(localPath);
     return tryOnAvatarBase64.current;
   }
 
@@ -812,14 +833,23 @@ export default function App() {
 
   async function renderOutfitPhotograph(outfit: Outfit) {
     if (!cloudSession || !FileSystem.cacheDirectory) throw new Error("outfit_cloud_unavailable");
+    const startedAt = Date.now();
     const temporaryPaths: string[] = [];
     try {
+      const avatarPreparationStartedAt = Date.now();
       const avatarBase64 = await accountAvatarBase64();
+      const avatarPreparationMs = Date.now() - avatarPreparationStartedAt;
+      const garmentPreparationStartedAt = Date.now();
+      let garmentCacheHits = 0;
+      let garmentCacheMisses = 0;
       const garmentInputs = [];
       for (const item of outfit.pieces.filter((piece) => piece.imagePath && piece.imageKind === "cutout")) {
         const cacheKey = `${item.id}:${item.imagePath}`;
         let imageBase64 = tryOnGarmentBase64.current.get(cacheKey);
-        if (!imageBase64) {
+        if (imageBase64) {
+          garmentCacheHits += 1;
+        } else {
+          garmentCacheMisses += 1;
           const localPath = `${FileSystem.cacheDirectory}${TRY_ON_RENDER_PREFIX}-look-${item.id}.png`;
           await FileSystem.deleteAsync(localPath, { idempotent: true }).catch(() => undefined);
           const download = await FileSystem.downloadAsync(`${cloudSession.apiUrl}${item.imagePath}`, localPath, {
@@ -831,9 +861,7 @@ export default function App() {
           });
           if (download.status < 200 || download.status >= 300) throw new Error(`outfit_garment_download_${download.status}`);
           temporaryPaths.push(download.uri);
-          imageBase64 = item.sourceType === "internet"
-            ? await prepareInternetTryOnReference(download.uri)
-            : await FileSystem.readAsStringAsync(download.uri, { encoding: FileSystem.EncodingType.Base64 });
+          imageBase64 = await prepareTryOnGarmentReference(download.uri);
           if (tryOnGarmentBase64.current.size >= 12) {
             const oldestKey = tryOnGarmentBase64.current.keys().next().value;
             if (oldestKey) tryOnGarmentBase64.current.delete(oldestKey);
@@ -850,12 +878,32 @@ export default function App() {
         });
       }
       if (!garmentInputs.length) throw new Error("outfit_cutouts_missing");
-      const result = await generateExperimentalTryOnImage(avatarBase64, garmentInputs, "low");
-      const renderPath = await uploadOutfitRender(cloudSession, outfit.id, result);
+      const garmentPreparationMs = Date.now() - garmentPreparationStartedAt;
+      const generated = await generateExperimentalTryOnImage(avatarBase64, garmentInputs, "low");
+      const cloudUploadStartedAt = Date.now();
+      const renderPath = await uploadOutfitRender(cloudSession, outfit.id, generated.imageBase64);
+      const cloudUploadMs = Date.now() - cloudUploadStartedAt;
       const localRenderUri = outfitCachePath(cloudSession, outfit.id);
+      const localSaveStartedAt = Date.now();
       if (localRenderUri) {
-        await FileSystem.writeAsStringAsync(localRenderUri, result, { encoding: FileSystem.EncodingType.Base64 });
+        await FileSystem.writeAsStringAsync(localRenderUri, generated.imageBase64, { encoding: FileSystem.EncodingType.Base64 });
       }
+      const localSaveMs = Date.now() - localSaveStartedAt;
+      await recordAvatarGenerationAudit({
+        recordedAt: new Date().toISOString(),
+        flow: "saved_look",
+        status: "completed",
+        quality: "low",
+        garmentCount: garmentInputs.length,
+        garmentCacheHits,
+        garmentCacheMisses,
+        ...generated.metrics,
+        avatarPreparationMs,
+        garmentPreparationMs,
+        cloudUploadMs,
+        localSaveMs,
+        totalMs: Date.now() - startedAt,
+      });
       return { renderPath, localRenderUri };
     } finally {
       await Promise.all(temporaryPaths.map((path) => FileSystem.deleteAsync(path, { idempotent: true }).catch(() => undefined)));
@@ -1013,7 +1061,7 @@ export default function App() {
         setLocalAvatarUri(cachedPath);
       }
       setCloudAvatar(avatar);
-      tryOnAvatarBase64.current = avatarDraftBase64.current;
+      tryOnAvatarBase64.current = null;
       await discardAvatarDraft();
       setAvatarSelfie(null);
       setAvatarFullBody(null);
@@ -1481,16 +1529,25 @@ export default function App() {
     quality: TryOnRenderQuality = "low",
   ) => {
     if (!cloudSession || !FileSystem.cacheDirectory || !FileSystem.documentDirectory) return;
+    const startedAt = Date.now();
     setTryOnRenderingQuality(quality);
     setTryOnRendering(true);
     const temporaryPaths: string[] = [];
     try {
+      const avatarPreparationStartedAt = Date.now();
       const avatarBase64 = await accountAvatarBase64();
+      const avatarPreparationMs = Date.now() - avatarPreparationStartedAt;
+      const garmentPreparationStartedAt = Date.now();
+      let garmentCacheHits = 0;
+      let garmentCacheMisses = 0;
       const garmentInputs = [];
       for (const layer of layers) {
         const cacheKey = `${layer.item.id}:${layer.item.imagePath}`;
         let imageBase64 = tryOnGarmentBase64.current.get(cacheKey);
-        if (!imageBase64) {
+        if (imageBase64) {
+          garmentCacheHits += 1;
+        } else {
+          garmentCacheMisses += 1;
           const localPath = `${FileSystem.cacheDirectory}${TRY_ON_RENDER_PREFIX}-${layer.item.id}.png`;
           await FileSystem.deleteAsync(localPath, { idempotent: true }).catch(() => undefined);
           const download = await FileSystem.downloadAsync(`${cloudSession.apiUrl}${layer.item.imagePath}`, localPath, {
@@ -1502,9 +1559,7 @@ export default function App() {
           });
           if (download.status < 200 || download.status >= 300) throw new Error(`try_on_garment_download_${download.status}`);
           temporaryPaths.push(download.uri);
-          imageBase64 = layer.item.sourceType === "internet"
-            ? await prepareInternetTryOnReference(download.uri)
-            : await FileSystem.readAsStringAsync(download.uri, { encoding: FileSystem.EncodingType.Base64 });
+          imageBase64 = await prepareTryOnGarmentReference(download.uri);
           if (tryOnGarmentBase64.current.size >= 12) {
             const oldestKey = tryOnGarmentBase64.current.keys().next().value;
             if (oldestKey) tryOnGarmentBase64.current.delete(oldestKey);
@@ -1520,9 +1575,12 @@ export default function App() {
           imageBase64,
         });
       }
-      const result = await generateExperimentalTryOnImage(avatarBase64, garmentInputs, quality);
+      const garmentPreparationMs = Date.now() - garmentPreparationStartedAt;
+      const generated = await generateExperimentalTryOnImage(avatarBase64, garmentInputs, quality);
       const outputPath = `${FileSystem.documentDirectory}${TRY_ON_RENDER_PREFIX}-${Date.now()}.png`;
-      await FileSystem.writeAsStringAsync(outputPath, result, { encoding: FileSystem.EncodingType.Base64 });
+      const localSaveStartedAt = Date.now();
+      await FileSystem.writeAsStringAsync(outputPath, generated.imageBase64, { encoding: FileSystem.EncodingType.Base64 });
+      const localSaveMs = Date.now() - localSaveStartedAt;
       const previousRender = tryOnRenderedUri;
       setTryOnRenderedUri(outputPath);
       setTryOnRenderedSignature(tryOnSignatureFor(layers));
@@ -1530,6 +1588,21 @@ export default function App() {
       if (previousRender?.startsWith("file:")) {
         await FileSystem.deleteAsync(previousRender, { idempotent: true }).catch(() => undefined);
       }
+      await recordAvatarGenerationAudit({
+        recordedAt: new Date().toISOString(),
+        flow: "builder",
+        status: "completed",
+        quality,
+        garmentCount: garmentInputs.length,
+        garmentCacheHits,
+        garmentCacheMisses,
+        ...generated.metrics,
+        avatarPreparationMs,
+        garmentPreparationMs,
+        cloudUploadMs: 0,
+        localSaveMs,
+        totalMs: Date.now() - startedAt,
+      });
     } catch (error) {
       setTryOnLayers(previousLayers);
       const detail = error instanceof Error ? error.message : "unknown";
@@ -2654,6 +2727,24 @@ function outfitCachePath(session: CloudSession, outfitId: string) {
 
 function outfitIndexCachePath(session: CloudSession) {
   return FileSystem.documentDirectory ? `${FileSystem.documentDirectory}vesta-${accountCachePrefix(session)}-looks.json` : null;
+}
+
+async function recordAvatarGenerationAudit(audit: AvatarGenerationAudit) {
+  if (!FileSystem.documentDirectory) return;
+  const auditPath = `${FileSystem.documentDirectory}vesta-avatar-generation-audit.json`;
+  try {
+    const info = await FileSystem.getInfoAsync(auditPath).catch(() => null);
+    let history: AvatarGenerationAudit[] = [];
+    if (info?.exists) {
+      const parsed = JSON.parse(await FileSystem.readAsStringAsync(auditPath)) as AvatarGenerationAudit[];
+      if (Array.isArray(parsed)) history = parsed;
+    }
+    history.push(audit);
+    await FileSystem.writeAsStringAsync(auditPath, JSON.stringify(history.slice(-20), null, 2));
+    console.info("[Vesta avatar generation audit]", JSON.stringify(audit));
+  } catch {
+    // Private diagnostics must never interrupt the fitting experience.
+  }
 }
 
 function categoryForUi(category: string): Exclude<Category, "all"> {

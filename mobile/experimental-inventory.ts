@@ -65,10 +65,20 @@ export type ExperimentalTryOnGarment = {
   imageBase64: string;
 };
 
-export async function prepareInternetTryOnReference(uri: string) {
-  const result = await ImageManipulator.manipulateAsync(uri, [{ resize: { width: 1600 } }], {
+export async function prepareAvatarTryOnReference(uri: string) {
+  const result = await ImageManipulator.manipulateAsync(uri, [{ resize: { height: 1024 } }], {
     base64: true,
-    compress: 1,
+    compress: 0.82,
+    format: ImageManipulator.SaveFormat.JPEG,
+  });
+  if (!result.base64) throw new Error("avatar_image_conversion_failed");
+  return result.base64;
+}
+
+export async function prepareTryOnGarmentReference(uri: string) {
+  const result = await ImageManipulator.manipulateAsync(uri, [{ resize: { width: 1024 } }], {
+    base64: true,
+    compress: 0.82,
     format: ImageManipulator.SaveFormat.PNG,
   });
   if (!result.base64) throw new Error("product_image_conversion_failed");
@@ -232,6 +242,8 @@ ${garmentList}
 Create one photorealistic full-body fashion fitting image in which the person from Image 1 is actually wearing every referenced garment in its specified anatomical placement. This must be a genuine image edit, not a collage or overlay: make fabric wrap around the body, follow the shoulders, chest, waist, hips, legs, head, or feet as appropriate, with realistic drape, folds, seams, sleeve openings, occlusion, scale, perspective, and contact shadows. Replace the neutral base clothing only where a selected garment belongs; keep neutral base clothing in unselected body regions.
 
 Preserve the person's identity, face, hair, skin tone, body shape and proportions, standing pose, hands, feet, camera angle, framing, lighting, and warm solid background from Image 1. Preserve each garment's real color, silhouette, material cues, graphics, logos, patterns, trim, pockets, and construction exactly as supported by its reference image. Do not invent or alter branding. Do not show any floating garment, catalog cutout, duplicated clothing, mannequin, hanger, phone, text, extra person, extra limb, or extra object. Output only the finished full-body portrait.`;
+  const requestedSize = quality === "low" ? "768x1024" : "1024x1536";
+  const generationStartedAt = Date.now();
   const response = await codexImageEdit({
     images: [
       { image_url: `data:image/jpeg;base64,${avatarBase64}` },
@@ -242,13 +254,22 @@ Preserve the person's identity, face, hair, skin tone, body shape and proportion
     moderation: "low",
     model: "gpt-image-2",
     quality,
-    size: "1024x1536",
+    size: requestedSize,
   });
   const payload = await response.json() as { data?: Array<{ b64_json?: string }>; error?: { message?: string; code?: string } };
   if (!response.ok) throw new Error(payload.error?.code || payload.error?.message || `try_on_image_edit_${response.status}`);
   const result = payload.data?.[0]?.b64_json;
   if (!result) throw new Error("try_on_image_edit_empty");
-  return result;
+  return {
+    imageBase64: result,
+    metrics: {
+      requestedSize,
+      generationRoundTripMs: Date.now() - generationStartedAt,
+      avatarInputBytes: decodedBase64Bytes(avatarBase64),
+      garmentInputBytes: garments.reduce((total, garment) => total + decodedBase64Bytes(garment.imageBase64), 0),
+      outputBytes: decodedBase64Bytes(result),
+    },
+  };
 }
 
 export async function generateExperimentalAvatarImage(
@@ -338,6 +359,11 @@ async function prepareImage(photo: ImagePicker.ImagePickerAsset) {
   });
   if (!result.base64) throw new Error("photo_conversion_failed");
   return result.base64;
+}
+
+function decodedBase64Bytes(value: string) {
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((value.length * 3) / 4) - padding);
 }
 
 function extractStream(raw: string) {
