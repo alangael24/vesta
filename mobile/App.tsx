@@ -273,6 +273,49 @@ function OutfitVisual({ outfit, session }: { outfit: Outfit; session: CloudSessi
   );
 }
 
+function LookCard({
+  outfit,
+  session,
+  onOpen,
+  onPeek,
+  onPeekEnd,
+}: {
+  outfit: Outfit;
+  session: CloudSession | null;
+  onOpen: () => void;
+  onPeek: () => void;
+  onPeekEnd: () => void;
+}) {
+  const longPressActive = useRef(false);
+  return (
+    <Pressable
+      style={styles.lookCard}
+      delayLongPress={280}
+      onPressIn={() => { longPressActive.current = false; }}
+      onLongPress={() => {
+        longPressActive.current = true;
+        onPeek();
+      }}
+      onPressOut={() => {
+        if (longPressActive.current) onPeekEnd();
+      }}
+      onPress={() => {
+        if (longPressActive.current) return;
+        onOpen();
+      }}
+      accessibilityLabel={outfit.name}
+      accessibilityHint="Toca para abrir o mantén presionado para ver las prendas del outfit"
+    >
+      <OutfitVisual outfit={outfit} session={session} />
+      <View style={styles.lookCopy}>
+        <Text style={styles.cardTitle}>{outfit.name}</Text>
+        <Text style={styles.cardMeta}>{outfit.occasion} · {outfit.pieces.length} prendas · {outfit.renderPath ? "foto lista" : "foto pendiente"}</Text>
+        <Text style={styles.lookHoldHint}>MANTÉN PRESIONADO PARA VER LAS PRENDAS</Text>
+      </View>
+    </Pressable>
+  );
+}
+
 function fittingSlotFor(item: WardrobeItem): FittingSlot {
   const descriptor = `${item.type} ${item.name} ${item.description || ""}`.toLowerCase();
   if (/(gorra|cachucha|sombrero|beanie|bucket|\bcap\b|\bhat\b)/u.test(descriptor)) return "head";
@@ -389,6 +432,7 @@ export default function App() {
   const [localAvatarUri, setLocalAvatarUri] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<WardrobeItem | null>(null);
   const [selectedOutfit, setSelectedOutfit] = useState<Outfit | null>(null);
+  const [peekedOutfit, setPeekedOutfit] = useState<Outfit | null>(null);
   const [photos, setPhotos] = useState<ImagePicker.ImagePickerAsset[]>([]);
   const [batchReady, setBatchReady] = useState(false);
   const [picking, setPicking] = useState(false);
@@ -414,6 +458,7 @@ export default function App() {
   const [tryOnResultQuality, setTryOnResultQuality] = useState<TryOnRenderQuality | null>(null);
   const [tryOnRenderedUri, setTryOnRenderedUri] = useState<string | null>(null);
   const [tryOnRenderedSignature, setTryOnRenderedSignature] = useState<string | null>(null);
+  const [tryOnSavedOutfitId, setTryOnSavedOutfitId] = useState<string | null>(null);
   const [wardrobeDrag, setWardrobeDrag] = useState<WardrobeDrag | null>(null);
   const appRootRef = useRef<View | null>(null);
   const appRootWindow = useRef({ x: 0, y: 0 });
@@ -1523,6 +1568,25 @@ export default function App() {
     }
   };
 
+  const saveTryOnAsOutfit = async (layers: TryOnLayer[], imageBase64: string) => {
+    if (!cloudSession) throw new Error("outfit_cloud_unavailable");
+    const response = await cloudFetch(cloudSession, "/api/v1/outfits", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ garmentIds: layers.map((layer) => String(layer.item.id)) }),
+    });
+    const payload = await response.json() as { selectedOutfitId?: string; error?: string };
+    if (!response.ok) throw new Error(payload.error || `outfit_save_${response.status}`);
+    if (!payload.selectedOutfitId) throw new Error("outfit_save_id_missing");
+    await uploadOutfitRender(cloudSession, payload.selectedOutfitId, imageBase64);
+    const localLookPath = outfitCachePath(cloudSession, payload.selectedOutfitId);
+    if (localLookPath) {
+      await FileSystem.writeAsStringAsync(localLookPath, imageBase64, { encoding: FileSystem.EncodingType.Base64 });
+    }
+    await loadOutfits(cloudSession);
+    return payload.selectedOutfitId;
+  };
+
   const renderRealTryOn = async (
     layers: TryOnLayer[],
     previousLayers: TryOnLayer[],
@@ -1588,6 +1652,17 @@ export default function App() {
       if (previousRender?.startsWith("file:")) {
         await FileSystem.deleteAsync(previousRender, { idempotent: true }).catch(() => undefined);
       }
+      const cloudSaveStartedAt = Date.now();
+      let cloudUploadMs = 0;
+      try {
+        const savedOutfitId = await saveTryOnAsOutfit(layers, generated.imageBase64);
+        setTryOnSavedOutfitId(savedOutfitId);
+        cloudUploadMs = Date.now() - cloudSaveStartedAt;
+      } catch {
+        cloudUploadMs = Date.now() - cloudSaveStartedAt;
+        setTryOnSavedOutfitId(null);
+        Alert.alert("Look listo, guardado pendiente", "La foto quedó en tu probador, pero no alcanzó a sincronizarse con Looks. Puedes volver a intentarlo sin cambiar las prendas.");
+      }
       await recordAvatarGenerationAudit({
         recordedAt: new Date().toISOString(),
         flow: "builder",
@@ -1599,7 +1674,7 @@ export default function App() {
         ...generated.metrics,
         avatarPreparationMs,
         garmentPreparationMs,
-        cloudUploadMs: 0,
+        cloudUploadMs,
         localSaveMs,
         totalMs: Date.now() - startedAt,
       });
@@ -1638,6 +1713,7 @@ export default function App() {
         clearTryOn().catch(() => undefined);
       } else {
         setTryOnLayers(nextLayers);
+        setTryOnSavedOutfitId(null);
       }
       setView("builder");
       return;
@@ -1650,6 +1726,7 @@ export default function App() {
       { key, item },
     ];
     setTryOnLayers(nextLayers);
+    setTryOnSavedOutfitId(null);
     setSelectedItem(null);
     setView("builder");
   };
@@ -1693,6 +1770,7 @@ export default function App() {
     setTryOnRenderedUri(null);
     setTryOnRenderedSignature(null);
     setTryOnResultQuality(null);
+    setTryOnSavedOutfitId(null);
     if (previousRender?.startsWith("file:")) {
       await FileSystem.deleteAsync(previousRender, { idempotent: true }).catch(() => undefined);
     }
@@ -1706,6 +1784,7 @@ export default function App() {
       return;
     }
     setTryOnLayers(nextLayers);
+    setTryOnSavedOutfitId(null);
   };
 
   const generateTryOnOutfit = () => {
@@ -1747,6 +1826,7 @@ export default function App() {
       return;
     }
     setTryOnLayers(readyPieces.map((item, index) => ({ key: `${item.id}-look-${index}`, item })));
+    setTryOnSavedOutfitId(outfit.id);
     setSelectedOutfit(null);
     setView("builder");
   };
@@ -1948,7 +2028,9 @@ export default function App() {
               <View style={styles.tryOnSelectionPanel}>
                 <View style={styles.tryOnSelectionHeading}>
                   <Text style={styles.tryOnControlEyebrow}>PRENDAS EN ESTE LOOK</Text>
-                  <Text style={styles.tryOnQualityBadge}>{tryOnHasPendingChanges ? "LISTO PARA PROBAR" : tryOnResultQuality === "medium" ? "MEJOR CALIDAD" : "VISTA RÁPIDA"}</Text>
+                  <Text style={styles.tryOnQualityBadge}>{tryOnHasPendingChanges
+                    ? "LISTO PARA PROBAR"
+                    : tryOnSavedOutfitId ? "GUARDADO EN LOOKS" : tryOnResultQuality === "medium" ? "MEJOR CALIDAD" : "VISTA RÁPIDA"}</Text>
                 </View>
                 <View style={styles.tryOnSelectionChips}>
                   {tryOnLayers.map((layer) => (
@@ -2004,13 +2086,13 @@ export default function App() {
               </View>
             }
             renderItem={({ item }) => (
-              <Pressable style={styles.lookCard} onPress={() => setSelectedOutfit(item)}>
-                <OutfitVisual outfit={item} session={cloudSession} />
-                <View style={styles.lookCopy}>
-                  <Text style={styles.cardTitle}>{item.name}</Text>
-                  <Text style={styles.cardMeta}>{item.occasion} · {item.pieces.length} prendas · {item.renderPath ? "foto lista" : "foto pendiente"}</Text>
-                </View>
-              </Pressable>
+              <LookCard
+                outfit={item}
+                session={cloudSession}
+                onOpen={() => setSelectedOutfit(item)}
+                onPeek={() => setPeekedOutfit(item)}
+                onPeekEnd={() => setPeekedOutfit(null)}
+              />
             )}
           />
         )}
@@ -2037,6 +2119,30 @@ export default function App() {
             ]}
           >
             <Image source={authorizedImageSource(cloudSession, wardrobeDrag.item.imagePath)} resizeMode="contain" style={styles.wardrobeDragGhostImage} />
+          </View>
+        )}
+
+        {peekedOutfit && (
+          <View pointerEvents="none" style={styles.lookPeekOverlay}>
+            <View style={styles.lookPeekCard}>
+              <View style={styles.lookPeekHeading}>
+                <View style={styles.lookPeekHeadingCopy}>
+                  <Text style={styles.lookPeekEyebrow}>PRENDAS DE ESTE OUTFIT</Text>
+                  <Text style={styles.lookPeekTitle}>{peekedOutfit.name}</Text>
+                </View>
+                <Text style={styles.lookPeekCount}>{peekedOutfit.pieces.length}</Text>
+              </View>
+              <View style={styles.lookPeekPieces}>
+                {peekedOutfit.pieces.map((piece) => (
+                  <View key={String(piece.id)} style={styles.lookPeekPiece}>
+                    <GarmentVisual item={piece} session={cloudSession} />
+                    <Text style={styles.lookPeekPieceName} numberOfLines={2}>{piece.name}</Text>
+                    <Text style={styles.lookPeekPieceMeta} numberOfLines={1}>{piece.type} · {piece.color}</Text>
+                  </View>
+                ))}
+              </View>
+              <Text style={styles.lookPeekRelease}>SUELTA PARA CERRAR</Text>
+            </View>
           </View>
         )}
       </View>
@@ -2489,6 +2595,19 @@ const styles = StyleSheet.create({
   generateButtonText: { color: "#FFF9EF", fontSize: 10, fontWeight: "800", letterSpacing: 0.3 },
   lookCard: { flex: 1, marginBottom: 14, backgroundColor: "#EAE5DA" },
   lookCopy: { padding: 10, backgroundColor: "#F8F5ED" },
+  lookHoldHint: { color: rust, fontSize: 5.5, fontWeight: "900", letterSpacing: 0.55, marginTop: 7 },
+  lookPeekOverlay: { position: "absolute", zIndex: 250, left: 0, right: 0, top: 0, bottom: 78, justifyContent: "center", paddingHorizontal: 18, backgroundColor: "rgba(25,23,20,.32)" },
+  lookPeekCard: { padding: 16, borderRadius: 22, borderWidth: 1, borderColor: "rgba(163,79,49,.24)", backgroundColor: "#F8F5ED", shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 18, shadowOffset: { width: 0, height: 10 } },
+  lookPeekHeading: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 13 },
+  lookPeekHeadingCopy: { flex: 1 },
+  lookPeekEyebrow: { color: rust, fontSize: 6, fontWeight: "900", letterSpacing: 1 },
+  lookPeekTitle: { color: ink, fontSize: 20, lineHeight: 24, marginTop: 4, fontFamily: Platform.select({ ios: "Georgia", android: "serif" }) },
+  lookPeekCount: { width: 34, height: 34, borderRadius: 17, textAlign: "center", lineHeight: 34, color: paper, fontSize: 10, fontWeight: "900", backgroundColor: ink },
+  lookPeekPieces: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  lookPeekPiece: { width: "31%", overflow: "hidden", borderWidth: 1, borderColor: line, borderRadius: 11, backgroundColor: paper },
+  lookPeekPieceName: { color: ink, minHeight: 22, paddingHorizontal: 7, paddingTop: 6, fontSize: 7, lineHeight: 10, fontWeight: "800" },
+  lookPeekPieceMeta: { color: muted, paddingHorizontal: 7, paddingTop: 2, paddingBottom: 7, fontSize: 5.5 },
+  lookPeekRelease: { color: muted, fontSize: 6, fontWeight: "900", letterSpacing: 1, textAlign: "center", marginTop: 14 },
   outfitPieceList: { marginTop: 12, marginBottom: 14, padding: 12, gap: 5, borderWidth: 1, borderColor: line, borderRadius: 12, backgroundColor: "#F8F5ED" },
   outfitPieceName: { color: ink, fontSize: 9, lineHeight: 14 },
   modalBackdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(22,20,17,.45)" },

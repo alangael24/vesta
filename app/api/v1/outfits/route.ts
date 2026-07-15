@@ -48,6 +48,56 @@ export async function POST(request: Request) {
     existingByOutfit.set(row.outfitId, ids);
   }
   const existingSignatures = new Set(Array.from(existingByOutfit.values(), signatureFor));
+  const wardrobeById = new Map(wardrobe.map((garment) => [garment.id, garment]));
+  const requestedGarmentIds = Array.isArray(body?.garmentIds)
+    ? Array.from(new Set(body.garmentIds.filter((id): id is string => typeof id === "string" && id.length > 0)))
+    : null;
+
+  if (requestedGarmentIds) {
+    if (!requestedGarmentIds.length || requestedGarmentIds.length > 6) {
+      return Response.json({ error: "outfit_garments_invalid" }, { status: 400, headers: privateHeaders() });
+    }
+    const selectedGarments = requestedGarmentIds
+      .map((garmentId) => wardrobeById.get(garmentId))
+      .filter((garment): garment is NonNullable<typeof garment> => Boolean(garment));
+    if (selectedGarments.length !== requestedGarmentIds.length) {
+      return Response.json({ error: "outfit_garment_unavailable" }, { status: 409, headers: privateHeaders() });
+    }
+
+    const requestedSignature = signatureFor(requestedGarmentIds);
+    const existingOutfitId = Array.from(existingByOutfit.entries())
+      .find(([, garmentIds]) => signatureFor(garmentIds) === requestedSignature)?.[0];
+    if (existingOutfitId) {
+      return Response.json({
+        outfits: await listOwnerOutfits(identity.ownerId),
+        created: 0,
+        selectedOutfitId: existingOutfitId,
+      }, { headers: privateHeaders() });
+    }
+
+    const [owner] = await db.select({ avatarVersion: users.avatarVersion }).from(users)
+      .where(eq(users.id, identity.ownerId)).limit(1);
+    const outfitId = crypto.randomUUID();
+    await db.insert(outfits).values({
+      id: outfitId,
+      ownerId: identity.ownerId,
+      name: manualOutfitName(selectedGarments),
+      occasion: "Creado por ti",
+      rationale: `Combinación creada en el probador con ${selectedGarments.length} ${selectedGarments.length === 1 ? "prenda" : "prendas"}.`,
+      piecesSnapshotJson: JSON.stringify(selectedGarments.map(snapshotGarment)),
+      avatarVersion: owner?.avatarVersion || null,
+      status: "saved",
+      updatedAt: new Date().toISOString(),
+    });
+    await db.insert(outfitItems).values(requestedGarmentIds.map((garmentId, position) => ({ outfitId, garmentId, position })));
+    return Response.json({
+      outfits: await listOwnerOutfits(identity.ownerId),
+      created: 1,
+      createdOutfitIds: [outfitId],
+      selectedOutfitId: outfitId,
+    }, { status: 201, headers: privateHeaders() });
+  }
+
   const suggestions = suggestOutfits(wardrobe, count, existingSignatures);
   if (!suggestions.length) {
     return Response.json({
@@ -58,7 +108,6 @@ export async function POST(request: Request) {
 
   const [owner] = await db.select({ avatarVersion: users.avatarVersion }).from(users)
     .where(eq(users.id, identity.ownerId)).limit(1);
-  const wardrobeById = new Map(wardrobe.map((garment) => [garment.id, garment]));
 
   const createdOutfitIds: string[] = [];
   for (const suggestion of suggestions) {
@@ -172,12 +221,21 @@ async function listOwnerOutfits(ownerId: string) {
   });
 }
 
-async function safeJson(request: Request): Promise<{ count?: number } | null> {
+async function safeJson(request: Request): Promise<{ count?: number; garmentIds?: unknown } | null> {
   try {
-    return await request.json() as { count?: number };
+    return await request.json() as { count?: number; garmentIds?: unknown };
   } catch {
     return null;
   }
+}
+
+function manualOutfitName(selectedGarments: Array<{ color: string | null; type: string; name: string }>) {
+  const descriptors = selectedGarments.map((garment) => {
+    const color = (garment.color || "").trim();
+    return color && !/sin confirmar|unknown/iu.test(color) ? color : garment.type || garment.name;
+  });
+  const uniqueDescriptors = Array.from(new Set(descriptors.filter(Boolean))).slice(0, 2);
+  return uniqueDescriptors.length ? `Mi look · ${uniqueDescriptors.join(" + ")}` : "Mi look";
 }
 
 function privateHeaders() {
