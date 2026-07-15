@@ -7,6 +7,7 @@ import { removeLightBackground } from "@/lib/light-background";
 import {
   canonicalizeProductUrl,
   classifyInternetGarment,
+  imageFetchUrl,
   isSafeRemoteUrl,
   parseProductPage,
   ProductPlacement,
@@ -252,7 +253,7 @@ async function fetchFirstUsableImage(candidates: URL[], referer: URL) {
     if (!isSafeRemoteUrl(url)) continue;
     try {
       // Prefer formats we can decode deterministically in the Worker for background removal.
-      const result = await fetchRemote(url, "image/png,image/jpeg,image/webp;q=0.8,image/*;q=0.7", referer);
+      const result = await fetchRemote(imageFetchUrl(url), "image/png,image/jpeg,image/webp;q=0.8,image/*;q=0.7", referer);
       const declaredType = normalizedContentType(result.response.headers.get("content-type"));
       if (declaredType.startsWith("image/") && !supportedDeclaredImageTypes.has(declaredType)) {
         await result.response.body?.cancel().catch(() => undefined);

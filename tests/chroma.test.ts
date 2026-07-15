@@ -100,6 +100,37 @@ test("an off-white garment on a white background remains opaque", () => {
   assert.equal(output.data[(8 * width + 8) * 4 + 3], 255, "the off-white garment remains opaque");
 });
 
+test("a textured white garment is reconstructed instead of feathering through its body", () => {
+  const width = 64;
+  const height = 64;
+  const rgba = new Uint8Array(width * height * 4).fill(255);
+  for (let y = 14; y < 56; y += 1) {
+    const sleeveExpansion = y < 26 ? 10 : 0;
+    for (let x = 18 - sleeveExpansion; x < 46 + sleeveExpansion; x += 1) {
+      const offset = (y * width + x) * 4;
+      const textileShade = (x + y) % 3 === 0 ? 246 : 252;
+      rgba[offset] = textileShade;
+      rgba[offset + 1] = textileShade;
+      rgba[offset + 2] = textileShade;
+    }
+  }
+  for (let y = 28; y < 36; y += 1) {
+    for (let x = 28; x < 36; x += 1) {
+      const offset = (y * width + x) * 4;
+      rgba[offset] = 25;
+      rgba[offset + 1] = 30;
+      rgba[offset + 2] = 35;
+    }
+  }
+
+  const result = removeLightBackground(encode({ width, height, data: rgba, channels: 4, depth: 8 }), "image/png");
+  assert.ok(result?.applied);
+  const output = decode(result.png);
+  assert.equal(output.data[3], 0, "the surrounding white background is removed");
+  assert.equal(output.data[(48 * width + 32) * 4 + 3], 255, "subtle white textile remains fully opaque");
+  assert.equal(result.stats.edgePixelRatio, 0, "destructive semi-transparent regions are eliminated");
+});
+
 test("JPEG retailer references use the same deterministic background removal", () => {
   const width = 16;
   const height = 16;

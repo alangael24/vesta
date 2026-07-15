@@ -20,6 +20,8 @@ export type LightBackgroundResult = {
 const maximumPixels = 24_000_000;
 const lightBackgroundTraversalDistance = 30;
 const lightBackgroundFeatherStart = 6;
+const conservativeTraversalDistance = 4;
+const excessiveFeatheredPixelRatio = 8;
 
 /**
  * Removes only a light, low-saturation background connected to the image edge.
@@ -37,7 +39,15 @@ export function removeLightBackground(input: Uint8Array, contentType: string): L
 
   if (background) floodLightBackground(rgba, width, height, background);
 
-  const stats = measure(rgba, width, height);
+  let stats = measure(rgba, width, height);
+  if (background && (stats.edgePixelRatio > excessiveFeatheredPixelRatio
+    || (stats.foregroundPixelRatio < 12 && stats.transparentPixelRatio > 50))) {
+    rgba.set(originalRgba);
+    floodLightBackground(rgba, width, height, background, conservativeTraversalDistance, 1);
+    reconstructForegroundSilhouette(rgba, originalRgba, width, height);
+    stats = measure(rgba, width, height);
+  }
+
   const newlyTransparent = stats.transparentPixelRatio - Math.round((initialTransparent / pixels) * 100);
   const applied = Boolean(background)
     && newlyTransparent >= 4
@@ -129,14 +139,21 @@ function estimateLightEdgeColor(rgba: Uint8Array, width: number, height: number)
   return [channel(0), channel(1), channel(2)];
 }
 
-function floodLightBackground(rgba: Uint8Array, width: number, height: number, background: [number, number, number]) {
+function floodLightBackground(
+  rgba: Uint8Array,
+  width: number,
+  height: number,
+  background: [number, number, number],
+  traversalDistance = lightBackgroundTraversalDistance,
+  featherStart = lightBackgroundFeatherStart,
+) {
   const pixels = width * height;
   const visited = new Uint8Array(pixels);
   const queue = new Int32Array(pixels);
   let head = 0;
   let tail = 0;
   const enqueue = (pixel: number) => {
-    if (visited[pixel] || !isLightBackgroundPixel(rgba, pixel, background)) return;
+    if (visited[pixel] || !isLightBackgroundPixel(rgba, pixel, background, traversalDistance)) return;
     visited[pixel] = 1;
     queue[tail] = pixel;
     tail += 1;
@@ -165,7 +182,7 @@ function floodLightBackground(rgba: Uint8Array, width: number, height: number, b
     const offset = pixel * 4;
     const originalAlpha = rgba[offset + 3];
     const distance = colorDistance(rgba[offset], rgba[offset + 1], rgba[offset + 2], background);
-    const opacity = smoothstep(lightBackgroundFeatherStart, lightBackgroundTraversalDistance, distance);
+    const opacity = smoothstep(featherStart, traversalDistance, distance);
     const alpha = Math.round(originalAlpha * opacity);
     if (alpha > 0 && alpha < originalAlpha) {
       const normalized = alpha / 255;
@@ -177,7 +194,44 @@ function floodLightBackground(rgba: Uint8Array, width: number, height: number, b
   }
 }
 
-function isLightBackgroundPixel(rgba: Uint8Array, pixel: number, background: [number, number, number]) {
+function reconstructForegroundSilhouette(
+  rgba: Uint8Array,
+  originalRgba: Uint8Array,
+  width: number,
+  height: number,
+) {
+  const rowFirst = new Int32Array(height).fill(width);
+  const rowLast = new Int32Array(height).fill(-1);
+  const columnFirst = new Int32Array(width).fill(height);
+  const columnLast = new Int32Array(width).fill(-1);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const pixel = y * width + x;
+      if (rgba[pixel * 4 + 3] === 0) continue;
+      rowFirst[y] = Math.min(rowFirst[y], x);
+      rowLast[y] = x;
+      columnFirst[x] = Math.min(columnFirst[x], y);
+      columnLast[x] = y;
+    }
+  }
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const offset = (y * width + x) * 4;
+      const inside = x >= rowFirst[y] && x <= rowLast[y] && y >= columnFirst[x] && y <= columnLast[x];
+      rgba[offset] = originalRgba[offset];
+      rgba[offset + 1] = originalRgba[offset + 1];
+      rgba[offset + 2] = originalRgba[offset + 2];
+      rgba[offset + 3] = inside ? originalRgba[offset + 3] : 0;
+    }
+  }
+}
+
+function isLightBackgroundPixel(
+  rgba: Uint8Array,
+  pixel: number,
+  background: [number, number, number],
+  traversalDistance: number,
+) {
   const offset = pixel * 4;
   if (rgba[offset + 3] < 32) return true;
   const red = rgba[offset];
@@ -187,7 +241,7 @@ function isLightBackgroundPixel(rgba: Uint8Array, pixel: number, background: [nu
   const chroma = Math.max(red, green, blue) - Math.min(red, green, blue);
   return luminance >= 174
     && chroma <= 86
-    && colorDistance(red, green, blue, background) <= lightBackgroundTraversalDistance;
+    && colorDistance(red, green, blue, background) <= traversalDistance;
 }
 
 function colorDistance(red: number, green: number, blue: number, target: [number, number, number]) {

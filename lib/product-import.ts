@@ -23,6 +23,18 @@ export function canonicalizeProductUrl(input: string) {
   return url;
 }
 
+export function imageFetchUrl(input: URL) {
+  const url = new URL(input);
+  const host = url.hostname.toLowerCase();
+  if (host === "cdn.shopify.com" || host.endsWith(".shopifycdn.com")) {
+    const requestedWidth = Number(url.searchParams.get("width"));
+    if (!Number.isFinite(requestedWidth) || requestedWidth > 1_600 || requestedWidth < 1) {
+      url.searchParams.set("width", "1600");
+    }
+  }
+  return url;
+}
+
 export function isSafeRemoteUrl(url: URL) {
   if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return false;
   if (url.port && url.port !== "80" && url.port !== "443") return false;

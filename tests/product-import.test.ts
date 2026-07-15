@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   canonicalizeProductUrl,
   classifyInternetGarment,
+  imageFetchUrl,
   isSafeRemoteUrl,
   parseProductPage,
 } from "../lib/product-import.ts";
@@ -61,4 +62,19 @@ test("canonical URLs discard tracking while remote URL checks reject private net
   assert.equal(isSafeRemoteUrl(new URL("http://127.0.0.1/cap.png")), false);
   assert.equal(isSafeRemoteUrl(new URL("http://192.168.1.20/cap.png")), false);
   assert.equal(isSafeRemoteUrl(new URL("http://localhost/cap.png")), false);
+});
+
+test("Shopify product images are requested at a Worker-safe size", () => {
+  assert.equal(
+    imageFetchUrl(new URL("https://cdn.shopify.com/s/files/1/1234/products/cap.jpg?v=7")).toString(),
+    "https://cdn.shopify.com/s/files/1/1234/products/cap.jpg?v=7&width=1600",
+  );
+  assert.equal(
+    imageFetchUrl(new URL("https://cdn.shopify.com/s/files/cap.jpg?width=900")).toString(),
+    "https://cdn.shopify.com/s/files/cap.jpg?width=900",
+  );
+  assert.equal(
+    imageFetchUrl(new URL("https://images.example.com/cap.jpg")).toString(),
+    "https://images.example.com/cap.jpg",
+  );
 });
