@@ -114,6 +114,11 @@ export function SubscriptionPaywall({ visible, onClose }: Props) {
   const selected = subscriptionPlans.find((plan) => plan.id === selectedPlan)!;
   const selectedProduct = productsById.get(selected.productId);
   const canPurchase = connected && Boolean(selectedProduct) && !purchasingProductId;
+  const selectedSubtitle = selectedPlan === "weekly"
+    ? "Flexibilidad para probar tu estilo"
+    : selectedPlan === "monthly"
+      ? "Tu clóset creativo, mes a mes"
+      : "La mejor forma de vestir todo el año";
 
   async function purchaseSelectedPlan() {
     if (!selectedProduct || !canPurchase) return;
@@ -155,103 +160,92 @@ export function SubscriptionPaywall({ visible, onClose }: Props) {
 
   return (
     <>
-      <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-        <View style={styles.backdrop}>
-          <View style={styles.sheet}>
-          <Pressable style={styles.closeButton} onPress={onClose} accessibilityLabel="Cerrar planes Premium">
-            <Text style={styles.closeText}>×</Text>
-          </Pressable>
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-            <View style={styles.crown}><Text style={styles.crownText}>OC</Text></View>
-            <Text style={styles.eyebrow}>OUTFIT CLUB PREMIUM</Text>
-            <Text style={styles.title}>Tu clóset, sin límites.</Text>
-            <Text style={styles.intro}>Desbloquea la experiencia Premium y elige el ritmo que mejor te quede.</Text>
+      <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" onRequestClose={onClose}>
+        <View style={styles.screen}>
+          <View style={styles.hero}>
+            <View style={styles.heroGlow} />
+            <View style={styles.lookCardBack} />
+            <View style={styles.lookCardFront}>
+              <Text style={styles.lookMonogram}>OC</Text>
+              <View style={styles.lookLine} />
+              <View style={[styles.lookLine, styles.lookLineShort]} />
+            </View>
+            <Pressable style={styles.closeButton} onPress={onClose} accessibilityLabel="Cerrar planes Premium">
+              <Text style={styles.closeText}>×</Text>
+            </Pressable>
+            <View style={styles.heroCopy}>
+              <Text style={styles.eyebrow}>OUTFIT CLUB</Text>
+              <Text style={styles.title}>Premium</Text>
+              <Text style={styles.intro}>{selectedSubtitle}</Text>
+            </View>
+          </View>
 
+          <View style={styles.segmentWrap} accessibilityRole="radiogroup">
+            {subscriptionPlans.map((plan) => {
+              const selectedNow = selectedPlan === plan.id;
+              return (
+                <Pressable key={plan.id} style={[styles.segment, selectedNow && styles.segmentSelected]}
+                  onPress={() => setSelectedPlan(plan.id)} accessibilityRole="radio"
+                  accessibilityState={{ selected: selectedNow }} accessibilityLabel={`Plan ${plan.title}`}>
+                  <Text style={[styles.segmentText, selectedNow && styles.segmentTextSelected]}>{plan.title}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          <ScrollView style={styles.body} showsVerticalScrollIndicator={false} contentContainerStyle={styles.bodyContent}>
             {hasPremium && (
-              <View style={styles.activePill}>
-                <View style={styles.activeDot} />
-                <Text style={styles.activeText}>PREMIUM ACTIVO</Text>
-              </View>
+              <View style={styles.activePill}><View style={styles.activeDot} /><Text style={styles.activeText}>PREMIUM ACTIVO EN ESTE IPHONE</Text></View>
             )}
+            {[
+              "Tu armario privado siempre sincronizado",
+              "Prueba outfits completos sobre tu avatar",
+              "Combina prendas tuyas con productos de internet",
+              "Guarda tus looks para volver a verlos cuando quieras",
+            ].map((benefit) => (
+              <View style={styles.benefitRow} key={benefit}>
+                <View style={styles.checkCircle}><Text style={styles.check}>✓</Text></View>
+                <Text style={styles.benefit}>{benefit}</Text>
+              </View>
+            ))}
+          </ScrollView>
 
-            <View style={styles.benefits}>
-              <Text style={styles.benefit}>✓ Armario privado sincronizado</Text>
-              <Text style={styles.benefit}>✓ Probador con tu avatar</Text>
-              <Text style={styles.benefit}>✓ Looks guardados en tu cuenta</Text>
+          <View style={styles.footer}>
+            <View style={styles.selectedPlanCard}>
+              <View style={styles.selectedRadio}><Text style={styles.selectedCheck}>✓</Text></View>
+              <View style={styles.selectedPlanCopy}>
+                <Text style={styles.selectedPlanTitle}>Plan {selected.title}</Text>
+                <Text style={styles.selectedPlanDescription}>{selected.description}</Text>
+              </View>
+              <View style={styles.priceCopy}>
+                <Text style={styles.price}>{selectedProduct?.displayPrice || "—"}</Text>
+                <Text style={styles.cadence}>{selectedProduct ? selected.cadence : "precio pendiente"}</Text>
+              </View>
+              {selected.badge && <Text style={styles.planBadge}>{selected.badge}</Text>}
             </View>
-
-            <View style={styles.planList}>
-              {subscriptionPlans.map((plan) => {
-                const product = productsById.get(plan.productId);
-                const selectedNow = selectedPlan === plan.id;
-                return (
-                  <Pressable
-                    key={plan.id}
-                    style={[styles.planCard, selectedNow && styles.planCardSelected]}
-                    onPress={() => setSelectedPlan(plan.id)}
-                    accessibilityRole="radio"
-                    accessibilityState={{ selected: selectedNow }}
-                    accessibilityLabel={`${plan.title}, ${product?.displayPrice || "precio pendiente"} ${plan.cadence}`}
-                  >
-                    <View style={[styles.radio, selectedNow && styles.radioSelected]}>
-                      {selectedNow && <View style={styles.radioDot} />}
-                    </View>
-                    <View style={styles.planCopy}>
-                      <View style={styles.planHeading}>
-                        <Text style={styles.planTitle}>{plan.title}</Text>
-                        {plan.badge && <Text style={styles.planBadge}>{plan.badge}</Text>}
-                      </View>
-                      <Text style={styles.planDescription}>{plan.description}</Text>
-                    </View>
-                    <View style={styles.priceCopy}>
-                      <Text style={styles.price}>{product?.displayPrice || "—"}</Text>
-                      <Text style={styles.cadence}>{product ? plan.cadence : "pendiente"}</Text>
-                    </View>
-                  </Pressable>
-                );
-              })}
-            </View>
-
             {storeMessage && <Text style={styles.storeMessage}>{storeMessage}</Text>}
             {!connected && <Text style={styles.storeHint}>Conectando con el App Store…</Text>}
-            {connected && !subscriptions.length && (
-              <Text style={styles.storeHint}>Los precios aparecerán cuando los productos estén disponibles en App Store Connect.</Text>
-            )}
-
-            <Pressable
-              style={[styles.purchaseButton, !canPurchase && styles.disabled]}
-              onPress={() => purchaseSelectedPlan().catch(() => undefined)}
-              disabled={!canPurchase}
-            >
-              {purchasingProductId
-                ? <ActivityIndicator color="#FFF9EF" />
-                : <Text style={styles.purchaseButtonText}>{selectedProduct ? `Suscribirme por ${selectedProduct.displayPrice}` : "Precio pendiente en App Store"}</Text>}
+            {connected && !subscriptions.length && <Text style={styles.storeHint}>Los precios aparecerán cuando App Store Connect los entregue.</Text>}
+            <Pressable style={[styles.purchaseButton, !canPurchase && styles.disabled]}
+              onPress={() => purchaseSelectedPlan().catch(() => undefined)} disabled={!canPurchase}>
+              {purchasingProductId ? <ActivityIndicator color="#FFF" />
+                : <Text style={styles.purchaseButtonText}>{selectedProduct ? "Continuar" : "Precio pendiente en App Store"}</Text>}
             </Pressable>
-
-            <Pressable style={styles.linkButton} onPress={() => restore().catch(() => undefined)} disabled={restoring}>
-              <Text style={styles.linkText}>{restoring ? "Restaurando…" : "Restaurar compras"}</Text>
-            </Pressable>
-            {hasPremium && (
-              <Pressable style={styles.linkButton} onPress={() => deepLinkToSubscriptions().catch(() => undefined)}>
-                <Text style={styles.linkText}>Administrar suscripción</Text>
+            <Text style={styles.cancelCopy}>Cancela en cualquier momento.</Text>
+            <View style={styles.helpRow}>
+              <Pressable onPress={() => restore().catch(() => undefined)} disabled={restoring}>
+                <Text style={styles.helpLink}>{restoring ? "Restaurando…" : "Restaurar compras"}</Text>
               </Pressable>
-            )}
-
-            <Text style={styles.renewalCopy}>
-              El pago se cargará a tu Apple ID al confirmar. La suscripción se renueva automáticamente salvo que la canceles al menos 24 horas antes de que termine el periodo actual. Puedes administrarla desde Ajustes del App Store.
-            </Text>
+              {hasPremium && <Pressable onPress={() => deepLinkToSubscriptions().catch(() => undefined)}><Text style={styles.helpLink}>Administrar</Text></Pressable>}
+            </View>
+            <Text style={styles.renewalCopy}>La suscripción se renueva automáticamente salvo cancelación al menos 24 horas antes del fin del periodo.</Text>
             <View style={styles.legalRow}>
-              <Pressable onPress={() => Linking.openURL(termsUrl).catch(() => undefined)}>
-                <Text style={styles.legalLink}>Términos de uso</Text>
-              </Pressable>
+              <Pressable onPress={() => Linking.openURL(termsUrl).catch(() => undefined)}><Text style={styles.legalLink}>Términos</Text></Pressable>
               <Text style={styles.legalSeparator}>·</Text>
-              <Pressable onPress={() => setPrivacyOpen(true)}>
-                <Text style={styles.legalLink}>Privacidad</Text>
-              </Pressable>
+              <Pressable onPress={() => setPrivacyOpen(true)}><Text style={styles.legalLink}>Privacidad</Text></Pressable>
               <Text style={styles.legalSeparator}>·</Text>
               <Text style={styles.legalNote}>{Platform.OS === "ios" ? "Pago seguro con Apple" : "Pago seguro"}</Text>
             </View>
-          </ScrollView>
           </View>
         </View>
       </Modal>
@@ -260,52 +254,64 @@ export function SubscriptionPaywall({ visible, onClose }: Props) {
   );
 }
 
-const ink = "#211F1B";
-const paper = "#F3EFE5";
-const rust = "#A34F31";
-const muted = "#777165";
-const line = "#D8D1C4";
+const ink = "#F7F2E9";
+const night = "#0D0E10";
+const panel = "#1B1D21";
+const violet = "#7567FF";
+const muted = "#A7A8AD";
+const line = "#34363C";
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(22,20,17,.48)" },
-  sheet: { maxHeight: "94%", overflow: "hidden", backgroundColor: paper, borderTopLeftRadius: 28, borderTopRightRadius: 28 },
-  content: { paddingHorizontal: 20, paddingTop: 36, paddingBottom: 34 },
-  closeButton: { position: "absolute", zIndex: 4, right: 14, top: 12, width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,.7)" },
-  closeText: { color: ink, fontSize: 25, fontWeight: "300" },
-  crown: { width: 54, height: 54, alignSelf: "center", alignItems: "center", justifyContent: "center", borderRadius: 27, backgroundColor: ink },
-  crownText: { color: paper, fontSize: 13, fontWeight: "900", letterSpacing: 1.5 },
-  eyebrow: { color: rust, textAlign: "center", fontSize: 8, fontWeight: "900", letterSpacing: 1.4, marginTop: 15 },
-  title: { color: ink, textAlign: "center", fontSize: 34, lineHeight: 38, letterSpacing: -1.2, marginTop: 7, fontFamily: Platform.select({ ios: "Georgia", android: "serif" }) },
-  intro: { color: muted, maxWidth: 330, alignSelf: "center", textAlign: "center", fontSize: 10, lineHeight: 16, marginTop: 10 },
-  activePill: { alignSelf: "center", flexDirection: "row", alignItems: "center", gap: 7, marginTop: 13, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 20, backgroundColor: "#E8EEE4" },
-  activeDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: "#607A58" },
-  activeText: { color: "#607A58", fontSize: 7, fontWeight: "900", letterSpacing: .8 },
-  benefits: { marginTop: 19, gap: 7, padding: 13, borderRadius: 14, backgroundColor: "#F8F5ED" },
-  benefit: { color: ink, fontSize: 9, lineHeight: 14, fontWeight: "600" },
-  planList: { gap: 9, marginTop: 15 },
-  planCard: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 82, padding: 12, borderWidth: 1, borderColor: line, borderRadius: 16, backgroundColor: "#F8F5ED" },
-  planCardSelected: { borderWidth: 2, borderColor: rust, padding: 11, backgroundColor: "#F7EDE7" },
-  radio: { width: 20, height: 20, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#AAA194", borderRadius: 10 },
-  radioSelected: { borderColor: rust },
-  radioDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: rust },
-  planCopy: { flex: 1 },
-  planHeading: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 },
-  planTitle: { color: ink, fontSize: 12, fontWeight: "900" },
-  planBadge: { color: "white", fontSize: 5, fontWeight: "900", letterSpacing: .6, paddingHorizontal: 6, paddingVertical: 4, borderRadius: 8, backgroundColor: rust },
-  planDescription: { color: muted, fontSize: 7, lineHeight: 11, marginTop: 5 },
-  priceCopy: { alignItems: "flex-end", maxWidth: 92 },
-  price: { color: ink, fontSize: 13, fontWeight: "900" },
-  cadence: { color: muted, fontSize: 6, marginTop: 3 },
-  storeMessage: { color: rust, textAlign: "center", fontSize: 8, lineHeight: 13, marginTop: 13 },
-  storeHint: { color: muted, textAlign: "center", fontSize: 7, lineHeight: 12, marginTop: 13 },
-  purchaseButton: { minHeight: 52, alignItems: "center", justifyContent: "center", marginTop: 16, paddingHorizontal: 16, borderRadius: 26, backgroundColor: ink },
-  purchaseButtonText: { color: "#FFF9EF", fontSize: 10, fontWeight: "900" },
+  screen: { flex: 1, backgroundColor: night, paddingTop: Platform.OS === "ios" ? 48 : 20 },
+  hero: { height: 250, marginHorizontal: 8, overflow: "hidden", borderRadius: 34, backgroundColor: "#392C55" },
+  heroGlow: { position: "absolute", width: 310, height: 310, borderRadius: 155, right: -80, top: -100, backgroundColor: "#BC7E74", opacity: .78 },
+  lookCardBack: { position: "absolute", right: 32, top: 52, width: 112, height: 142, borderRadius: 17, backgroundColor: "#1A1618", opacity: .75, transform: [{ rotate: "8deg" }] },
+  lookCardFront: { position: "absolute", right: 55, top: 40, width: 112, height: 145, padding: 16, borderRadius: 17, backgroundColor: "#E8D0BF", transform: [{ rotate: "-5deg" }] },
+  lookMonogram: { color: "#241C1A", fontFamily: Platform.select({ ios: "Georgia", android: "serif" }), fontSize: 28, fontWeight: "700" },
+  lookLine: { width: 62, height: 5, borderRadius: 3, marginTop: 46, backgroundColor: "#9A5B47" },
+  lookLineShort: { width: 42, marginTop: 7, opacity: .5 },
+  closeButton: { position: "absolute", zIndex: 4, right: 16, top: 16, width: 52, height: 52, borderRadius: 26, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(20,20,24,.58)" },
+  closeText: { color: "#FFF", fontSize: 40, lineHeight: 44, fontWeight: "200" },
+  heroCopy: { position: "absolute", left: 28, bottom: 43, maxWidth: "60%" },
+  eyebrow: { color: "#E9B9A8", fontSize: 11, fontWeight: "900", letterSpacing: 2 },
+  title: { color: "#FFF", fontSize: 36, lineHeight: 40, letterSpacing: -.8, marginTop: 6, fontWeight: "800" },
+  intro: { color: "#F4EDE9", fontSize: 17, lineHeight: 23, marginTop: 8 },
+  segmentWrap: { zIndex: 5, height: 64, flexDirection: "row", alignItems: "center", marginHorizontal: 44, marginTop: -32, padding: 7, borderRadius: 32, backgroundColor: "#4B3A77" },
+  segment: { flex: 1, height: 50, alignItems: "center", justifyContent: "center", borderRadius: 25 },
+  segmentSelected: { backgroundColor: "#17151C" },
+  segmentText: { color: "#E7E1F1", fontSize: 16, fontWeight: "700" },
+  segmentTextSelected: { color: "#FFF" },
+  body: { flex: 1 },
+  bodyContent: { paddingHorizontal: 24, paddingTop: 22, paddingBottom: 24, gap: 16 },
+  activePill: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 18, backgroundColor: "#17241E" },
+  activeDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: "#71B78D" },
+  activeText: { color: "#8DD0A6", fontSize: 9, fontWeight: "900", letterSpacing: .7 },
+  benefitRow: { minHeight: 58, flexDirection: "row", alignItems: "center", gap: 14 },
+  checkCircle: { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center", backgroundColor: "#26232F" },
+  check: { color: violet, fontSize: 27, fontWeight: "700" },
+  benefit: { flex: 1, color: ink, fontSize: 17, lineHeight: 23, fontWeight: "600" },
+  footer: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: Platform.OS === "ios" ? 22 : 16, borderTopWidth: 1, borderTopColor: line, backgroundColor: night },
+  selectedPlanCard: { minHeight: 92, flexDirection: "row", alignItems: "center", gap: 11, padding: 14, borderWidth: 2, borderColor: violet, borderRadius: 18, backgroundColor: panel },
+  selectedRadio: { width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center", backgroundColor: violet },
+  selectedCheck: { color: "#FFF", fontSize: 20, fontWeight: "800" },
+  selectedPlanCopy: { flex: 1 },
+  selectedPlanTitle: { color: ink, fontSize: 15, fontWeight: "800" },
+  selectedPlanDescription: { color: muted, fontSize: 10, lineHeight: 14, marginTop: 4 },
+  planBadge: { position: "absolute", right: 10, top: -11, overflow: "hidden", color: "white", fontSize: 9, fontWeight: "900", letterSpacing: .4, paddingHorizontal: 9, paddingVertical: 5, borderRadius: 9, backgroundColor: violet },
+  priceCopy: { alignItems: "flex-end", maxWidth: 90 },
+  price: { color: ink, fontSize: 17, fontWeight: "900" },
+  cadence: { color: muted, fontSize: 9, marginTop: 4 },
+  storeMessage: { color: "#F19B7E", textAlign: "center", fontSize: 11, lineHeight: 15, marginTop: 8 },
+  storeHint: { color: muted, textAlign: "center", fontSize: 10, lineHeight: 14, marginTop: 8 },
+  purchaseButton: { minHeight: 58, alignItems: "center", justifyContent: "center", marginTop: 14, paddingHorizontal: 16, borderRadius: 29, backgroundColor: violet },
+  purchaseButtonText: { color: "#FFF", fontSize: 18, fontWeight: "800" },
   disabled: { opacity: .5 },
-  linkButton: { alignItems: "center", paddingVertical: 10 },
-  linkText: { color: rust, fontSize: 8, fontWeight: "800", textDecorationLine: "underline" },
-  renewalCopy: { color: muted, textAlign: "center", fontSize: 7, lineHeight: 12, marginTop: 5 },
-  legalRow: { flexDirection: "row", justifyContent: "center", gap: 6, marginTop: 12 },
-  legalLink: { color: ink, fontSize: 7, textDecorationLine: "underline" },
-  legalSeparator: { color: muted, fontSize: 7 },
-  legalNote: { color: muted, fontSize: 7 },
+  cancelCopy: { color: muted, textAlign: "center", fontSize: 11, marginTop: 12 },
+  helpRow: { flexDirection: "row", justifyContent: "center", gap: 20, marginTop: 7 },
+  helpLink: { color: "#9B91FF", fontSize: 11, fontWeight: "700", textDecorationLine: "underline" },
+  renewalCopy: { color: "#74767D", textAlign: "center", fontSize: 8, lineHeight: 11, marginTop: 8 },
+  legalRow: { flexDirection: "row", justifyContent: "center", gap: 6, marginTop: 7 },
+  legalLink: { color: muted, fontSize: 9, textDecorationLine: "underline" },
+  legalSeparator: { color: "#66686E", fontSize: 9 },
+  legalNote: { color: muted, fontSize: 9 },
 });
