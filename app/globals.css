@@ -29,6 +29,22 @@ body {
 
 body.sheet-active { overflow: hidden; }
 
+.privacy-page { min-height: 100svh; background: var(--paper); }
+.privacy-page-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 72px; padding: 12px clamp(18px, 5vw, 64px); border-bottom: 1px solid var(--line); }
+.privacy-brand { display: inline-flex; align-items: center; gap: 10px; color: var(--ink); font-size: 12px; font-weight: 800; letter-spacing: .17em; text-decoration: none; }
+.privacy-brand span { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: var(--ink); color: var(--paper); font-family: Georgia, serif; font-size: 10px; letter-spacing: .06em; }
+.privacy-badge { color: #53644f; font-size: 8px; font-weight: 800; letter-spacing: .12em; }
+.privacy-document { width: min(760px, calc(100% - 36px)); margin: 0 auto; padding: clamp(54px, 9vw, 96px) 0 80px; }
+.privacy-eyebrow { margin: 0 0 14px; color: var(--rust); font-family: var(--font-geist-mono), monospace; font-size: 10px; font-weight: 800; letter-spacing: .16em; }
+.privacy-document h1 { max-width: 680px; margin: 0; color: var(--ink); font-family: Georgia, serif; font-size: clamp(42px, 7vw, 72px); font-weight: 400; line-height: .98; letter-spacing: -.04em; }
+.privacy-date { margin: 22px 0 0; color: var(--rust); font-size: 11px; font-weight: 750; letter-spacing: .04em; }
+.privacy-lead { max-width: 650px; margin: 28px 0 24px; color: var(--muted); font-size: 17px; line-height: 1.65; }
+.privacy-document section { padding: 28px 0; border-top: 1px solid var(--line); }
+.privacy-document h2 { margin: 0; color: var(--ink); font-family: Georgia, serif; font-size: 22px; font-weight: 400; }
+.privacy-document section p, .privacy-contact p { margin: 12px 0 0; color: var(--muted); font-size: 14px; line-height: 1.75; }
+.privacy-contact { margin-top: 28px; padding: 25px; border: 1px solid var(--line); border-radius: 20px; background: rgba(255,255,255,.28); }
+.privacy-contact strong { color: var(--ink); }
+
 button, input { font: inherit; }
 button { color: inherit; }
 

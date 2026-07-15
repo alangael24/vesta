@@ -43,6 +43,7 @@ import {
   prepareTryOnGarmentReference,
 } from "./experimental-inventory";
 import { SubscriptionPaywall } from "./SubscriptionPaywall";
+import { PrivacyPolicyModal } from "./PrivacyPolicy";
 
 type ViewName = "closet" | "builder" | "looks";
 type Category = "all" | "tops" | "layers" | "bottoms" | "accessories";
@@ -496,6 +497,7 @@ export default function App() {
   const [productPlacement, setProductPlacement] = useState<ProductPlacementHint>("auto");
   const [productImporting, setProductImporting] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [privacyOpen, setPrivacyOpen] = useState(false);
   const [paywallOpen, setPaywallOpen] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
   const [avatarSelfie, setAvatarSelfie] = useState<ImagePicker.ImagePickerAsset | null>(null);
@@ -2337,6 +2339,9 @@ export default function App() {
                 </View>
                 <Text style={styles.premiumCardArrow}>›</Text>
               </Pressable>
+              <Pressable style={styles.secondaryButton} onPress={() => { setProfileOpen(false); setPrivacyOpen(true); }}>
+                <Text style={styles.secondaryButtonText}>Política de privacidad</Text>
+              </Pressable>
               {cloudSession && (
                 <Pressable style={[styles.fullButton, styles.avatarProfileButton]} onPress={() => { setProfileOpen(false); setAvatarOpen(true); }}>
                   <Text style={styles.fullButtonText}>{avatarDisplaySource ? "Administrar mi avatar" : "Crear mi avatar"}</Text>
@@ -2352,6 +2357,7 @@ export default function App() {
       </Modal>
 
       <SubscriptionPaywall visible={paywallOpen} onClose={() => setPaywallOpen(false)} />
+      <PrivacyPolicyModal visible={privacyOpen} onClose={() => setPrivacyOpen(false)} />
 
       <Modal visible={avatarOpen} transparent animationType="slide" onRequestClose={() => setAvatarOpen(false)}>
         <View style={styles.modalBackdrop}>

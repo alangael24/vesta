@@ -22,6 +22,7 @@ import {
   subscriptionPlans,
   subscriptionProductIdList,
 } from "./subscriptions";
+import { PrivacyPolicyModal } from "./PrivacyPolicy";
 
 const termsUrl = "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/";
 
@@ -35,6 +36,7 @@ export function SubscriptionPaywall({ visible, onClose }: Props) {
   const [purchasingProductId, setPurchasingProductId] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
   const [hasPremium, setHasPremium] = useState(false);
+  const [privacyOpen, setPrivacyOpen] = useState(false);
   const [storeMessage, setStoreMessage] = useState<string | null>(null);
   const [lastPurchase, setLastPurchase] = useState<Purchase | null>(null);
   const processedTransactions = useRef(new Set<string>());
@@ -152,9 +154,10 @@ export function SubscriptionPaywall({ visible, onClose }: Props) {
   }
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.backdrop}>
-        <View style={styles.sheet}>
+    <>
+      <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+        <View style={styles.backdrop}>
+          <View style={styles.sheet}>
           <Pressable style={styles.closeButton} onPress={onClose} accessibilityLabel="Cerrar planes Premium">
             <Text style={styles.closeText}>×</Text>
           </Pressable>
@@ -242,12 +245,18 @@ export function SubscriptionPaywall({ visible, onClose }: Props) {
                 <Text style={styles.legalLink}>Términos de uso</Text>
               </Pressable>
               <Text style={styles.legalSeparator}>·</Text>
+              <Pressable onPress={() => setPrivacyOpen(true)}>
+                <Text style={styles.legalLink}>Privacidad</Text>
+              </Pressable>
+              <Text style={styles.legalSeparator}>·</Text>
               <Text style={styles.legalNote}>{Platform.OS === "ios" ? "Pago seguro con Apple" : "Pago seguro"}</Text>
             </View>
           </ScrollView>
+          </View>
         </View>
-      </View>
-    </Modal>
+      </Modal>
+      <PrivacyPolicyModal visible={privacyOpen} onClose={() => setPrivacyOpen(false)} />
+    </>
   );
 }
 
