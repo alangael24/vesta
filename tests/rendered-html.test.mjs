@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 async function render() {
@@ -20,9 +21,14 @@ test("server-renders the Vesta mobile app", async () => {
 
   const html = await response.text();
   assert.match(html, /Vesta — tu armario, mejor combinado/i);
-  assert.match(html, /Tu colección/i);
+  assert.match(html, /Colección de muestra/i);
   assert.match(html, /Armario/i);
   assert.match(html, /Importar fotos/i);
   assert.match(html, /manifest\.webmanifest/i);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
+
+  const source = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  assert.match(source, /Ver looks de muestra/i);
+  assert.match(source, /Selección local · envío desactivado/i);
+  assert.doesNotMatch(source, /6 prendas detectadas|4 looks nuevos listos|Usar fotos de ejemplo/i);
 });

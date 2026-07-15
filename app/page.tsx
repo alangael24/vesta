@@ -28,6 +28,13 @@ type InstallPrompt = Event & {
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 };
 
+type LocalPhoto = {
+  id: string;
+  name: string;
+  size: number;
+  url: string;
+};
+
 const wardrobe: WardrobeItem[] = [
   { id: 0, name: "Camiseta negra", category: "tops", type: "Camiseta", color: "Negro", material: "Algodón", description: "Una base limpia para looks sencillos o capas más marcadas." },
   { id: 1, name: "Polo marino", category: "tops", type: "Polo", color: "Azul marino", material: "Piqué", description: "Pulido sin sentirse formal; funciona especialmente bien con tonos arena." },
@@ -102,6 +109,16 @@ function OutfitArt({ outfit, className = "" }: { outfit: Outfit; className?: str
   );
 }
 
+function loadFavorites(): number[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const stored = window.localStorage.getItem("vesta-favorites");
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
+  }
+}
+
 export default function Home() {
   const [view, setView] = useState<View>("closet");
   const [filter, setFilter] = useState<Category>("all");
@@ -109,19 +126,16 @@ export default function Home() {
   const [selectedOutfit, setSelectedOutfit] = useState<Outfit | null>(null);
   const [builderItems, setBuilderItems] = useState<number[]>([2, 9]);
   const [occasion, setOccasion] = useState("Diario");
-  const [favorites, setFavorites] = useState<number[]>([]);
+  const [favorites, setFavorites] = useState<number[]>(loadFavorites);
   const [showImport, setShowImport] = useState(false);
   const [showInstall, setShowInstall] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<InstallPrompt | null>(null);
-  const [fileCount, setFileCount] = useState(0);
-  const [processing, setProcessing] = useState(false);
-  const [progress, setProgress] = useState(0);
+  const [selectedPhotos, setSelectedPhotos] = useState<LocalPhoto[]>([]);
+  const [batchPrepared, setBatchPrepared] = useState(false);
   const [toast, setToast] = useState("");
 
   useEffect(() => {
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
-    const stored = window.localStorage.getItem("vesta-favorites");
-    if (stored) setFavorites(JSON.parse(stored));
     const handler = (event: Event) => {
       event.preventDefault();
       setInstallPrompt(event as InstallPrompt);
@@ -145,9 +159,18 @@ export default function Home() {
     return () => document.body.classList.remove("sheet-active");
   }, [selectedItem, selectedOutfit, showImport, showInstall]);
 
+  useEffect(() => {
+    return () => selectedPhotos.forEach((photo) => URL.revokeObjectURL(photo.url));
+  }, [selectedPhotos]);
+
   const visibleItems = useMemo(
     () => wardrobe.filter((item) => filter === "all" || item.category === filter),
     [filter],
+  );
+
+  const selectedPhotoSize = useMemo(
+    () => selectedPhotos.reduce((total, photo) => total + photo.size, 0),
+    [selectedPhotos],
   );
 
   const openView = (next: View) => {
@@ -171,41 +194,38 @@ export default function Home() {
   };
 
   const handleFiles = (event: ChangeEvent<HTMLInputElement>) => {
-    setFileCount(event.target.files?.length ?? 0);
+    const files = Array.from(event.target.files ?? []).slice(0, 40);
+    setSelectedPhotos(files.map((file, index) => ({
+      id: `${file.name}-${file.lastModified}-${index}`,
+      name: file.name,
+      size: file.size,
+      url: URL.createObjectURL(file),
+    })));
+    setBatchPrepared(false);
+    event.target.value = "";
   };
 
-  const runProgress = (done: () => void) => {
-    setProcessing(true);
-    setProgress(8);
-    let value = 8;
-    const interval = window.setInterval(() => {
-      value = Math.min(value + Math.floor(Math.random() * 14) + 5, 94);
-      setProgress(value);
-    }, 180);
-    window.setTimeout(() => {
-      window.clearInterval(interval);
-      setProgress(100);
-      window.setTimeout(() => {
-        setProcessing(false);
-        setProgress(0);
-        done();
-      }, 350);
-    }, 1550);
+  const formatBytes = (bytes: number) => {
+    if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
-  const analyzePhotos = () => {
-    runProgress(() => {
-      setShowImport(false);
-      setFileCount(0);
-      setToast("6 prendas detectadas y organizadas");
-    });
+  const prepareBatch = () => {
+    if (!selectedPhotos.length) return;
+    setBatchPrepared(true);
+    setShowImport(false);
+    setToast("Lote listo en esta sesión · nada se ha subido");
   };
 
-  const generateLooks = () => {
-    runProgress(() => {
-      openView("outfits");
-      setToast("4 looks nuevos listos");
-    });
+  const clearBatch = () => {
+    setSelectedPhotos([]);
+    setBatchPrepared(false);
+    setToast("Selección local eliminada");
+  };
+
+  const showSampleLooks = () => {
+    openView("outfits");
+    setToast("Estos looks son una muestra del producto");
   };
 
   const installApp = async () => {
@@ -224,7 +244,7 @@ export default function Home() {
         </button>
         <div className="top-actions">
           <button className="quiet-button" onClick={installApp}>Instalar</button>
-          <button className="avatar-button" aria-label="Perfil de demo">AL</button>
+          <button className="avatar-button" aria-label="Perfil de Alan">AL</button>
         </div>
       </header>
 
@@ -232,13 +252,24 @@ export default function Home() {
         <section className="content-section closet-view" aria-labelledby="closet-title">
           <div className="section-heading">
             <div>
-              <p className="eyebrow">Tu colección</p>
+              <p className="eyebrow">Colección de muestra</p>
               <h1 id="closet-title">Armario <span>{wardrobe.length}</span></h1>
             </div>
             <button className="primary-button compact" onClick={() => setShowImport(true)}>
               <span aria-hidden="true">＋</span> Importar fotos
             </button>
           </div>
+
+          {batchPrepared && selectedPhotos.length > 0 && (
+            <div className="local-batch" role="status">
+              <span className="status-dot" aria-hidden="true" />
+              <div>
+                <strong>Lote local preparado</strong>
+                <small>{selectedPhotos.length} fotos · {formatBytes(selectedPhotoSize)} · sin subir</small>
+              </div>
+              <button onClick={() => setShowImport(true)}>Revisar</button>
+            </div>
+          )}
 
           <div className="filter-row" aria-label="Filtrar prendas">
             {filters.map((option) => (
@@ -272,7 +303,7 @@ export default function Home() {
           <div className="builder-hero">
             <p className="eyebrow">Estilista personal</p>
             <h1 id="builder-title">Crea un look con lo que ya tienes.</h1>
-            <p>Elige hasta tres prendas, cuéntanos el plan y Vesta encuentra combinaciones dentro de tu armario.</p>
+            <p>Explora cómo se sentirá el estilista. La personalización con tus prendas se activará cuando conectemos el procesamiento privado.</p>
           </div>
 
           <div className="builder-panel">
@@ -307,10 +338,9 @@ export default function Home() {
               </div>
             </div>
 
-            <button className="generate-button" disabled={!builderItems.length || processing} onClick={generateLooks}>
-              {processing ? <><span className="spinner" /> Combinando… {progress}%</> : <>Generar looks <span>✦</span></>}
+            <button className="generate-button" disabled={!builderItems.length} onClick={showSampleLooks}>
+              Ver looks de muestra <span>✦</span>
             </button>
-            {processing && <div className="progress-line"><span style={{ width: `${progress}%` }} /></div>}
           </div>
         </section>
       )}
@@ -319,7 +349,7 @@ export default function Home() {
         <section className="content-section outfits-view" aria-labelledby="outfits-title">
           <div className="section-heading">
             <div>
-              <p className="eyebrow">Hechos con tu armario</p>
+              <p className="eyebrow">Inspiración de muestra</p>
               <h1 id="outfits-title">Looks <span>{outfits.length}</span></h1>
             </div>
             <button className="primary-button compact" onClick={() => openView("builder")}>Crear otro <span aria-hidden="true">✦</span></button>
@@ -405,23 +435,41 @@ export default function Home() {
       )}
 
       {showImport && (
-        <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && !processing && setShowImport(false)}>
+        <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && setShowImport(false)}>
           <section className="import-modal" aria-labelledby="import-title">
-            <button className="sheet-close" onClick={() => !processing && setShowImport(false)} aria-label="Cerrar">×</button>
+            <button className="sheet-close" onClick={() => setShowImport(false)} aria-label="Cerrar">×</button>
             <div className="scan-orbit"><span>✦</span></div>
             <p className="eyebrow">Importación privada</p>
-            <h2 id="import-title">Convierte tus fotos en un armario.</h2>
-            <p>Elige fotos de tu carrete. En esta demo no se suben ni se guardan: solo verás cómo funcionaría el flujo.</p>
+            <h2 id="import-title">Elige las fotos para tu armario.</h2>
+            <p>La selección y las miniaturas viven solo en la memoria de este dispositivo. Vesta todavía no sube, guarda ni analiza tus fotos.</p>
+            <div className="privacy-status"><span className="status-dot" aria-hidden="true" /> Selección local · envío desactivado</div>
             <label className="photo-picker">
-              <input type="file" accept="image/*" multiple onChange={handleFiles} disabled={processing} />
-              <span>{fileCount ? `${fileCount} fotos seleccionadas` : "Elegir fotos del carrete"}</span>
-              <small>JPG, PNG o HEIC</small>
+              <input type="file" accept="image/*" multiple onChange={handleFiles} />
+              <span>{selectedPhotos.length ? "Cambiar selección" : "Elegir fotos del carrete"}</span>
+              <small>JPG, PNG o HEIC · máximo 40</small>
             </label>
-            <button className="primary-button" disabled={processing} onClick={() => { if (!fileCount) setFileCount(12); else analyzePhotos(); }}>
-              {!fileCount ? "Usar fotos de ejemplo" : processing ? `Analizando… ${progress}%` : "Detectar prendas"}
-            </button>
-            {fileCount > 0 && !processing && <button className="text-button center" onClick={analyzePhotos}>Continuar con {fileCount} fotos →</button>}
-            {processing && <div className="progress-line"><span style={{ width: `${progress}%` }} /></div>}
+            {selectedPhotos.length > 0 && (
+              <>
+                <div className="photo-preview-grid" aria-label="Fotos seleccionadas">
+                  {selectedPhotos.slice(0, 6).map((photo, index) => (
+                    <figure key={photo.id}>
+                      {/* Blob URLs from the phone picker cannot use Next image optimization. */}
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={photo.url} alt={`Foto seleccionada ${index + 1}`} />
+                      <figcaption>{photo.name}</figcaption>
+                    </figure>
+                  ))}
+                  {selectedPhotos.length > 6 && <div className="more-photos">+{selectedPhotos.length - 6}</div>}
+                </div>
+                <div className="batch-summary">
+                  <strong>{selectedPhotos.length} fotos preparadas</strong>
+                  <span>{formatBytes(selectedPhotoSize)} en esta sesión</span>
+                </div>
+                <button className="primary-button" onClick={prepareBatch}>Dejar lote preparado</button>
+                <button className="text-button center danger-text" onClick={clearBatch}>Eliminar selección local</button>
+              </>
+            )}
+            {!selectedPhotos.length && <p className="pipeline-note">El detector de prendas se conectará después de que decidamos juntos dónde procesar tus fotos.</p>}
           </section>
         </div>
       )}
