@@ -68,6 +68,7 @@ type Outfit = {
   name: string;
   occasion: string;
   note: string;
+  renderPath?: string | null;
   status?: string;
   pieces: WardrobeItem[];
 };
@@ -111,6 +112,8 @@ type CloudGarment = {
   imageKind?: "cutout" | "evidence";
 };
 
+type CloudOutfit = Omit<Outfit, "pieces"> & { pieces: CloudGarment[] };
+
 const cloudKeys = {
   apiUrl: "vesta.api-url",
   dispatchToken: "vesta.dispatch-token",
@@ -119,6 +122,13 @@ const cloudKeys = {
 };
 const CLOUD_CONNECT_URL = "https://vesta-armario-alan.alangael2411.chatgpt.site/api/v1/pairing";
 const TRY_ON_RENDER_PREFIX = "vesta-try-on-render";
+
+function outfitsForUi(values: CloudOutfit[]) {
+  return values.map((outfit) => ({
+    ...outfit,
+    pieces: outfit.pieces.map((piece) => ({ ...piece, category: categoryForUi(piece.category) })),
+  }));
+}
 
 function tryOnSignatureFor(layers: TryOnLayer[]) {
   return layers.map((layer) => `${layer.item.id}:${layer.item.imagePath || ""}`).join("|");
@@ -185,6 +195,14 @@ function GarmentVisual({ item, session }: { item: WardrobeItem; session: CloudSe
 }
 
 function OutfitVisual({ outfit, session }: { outfit: Outfit; session: CloudSession | null }) {
+  if (outfit.renderPath && session) {
+    return (
+      <View style={styles.outfitCollage}>
+        <Image source={authorizedImageSource(session, outfit.renderPath)} resizeMode="cover" style={styles.outfitRenderImage} />
+        <View style={styles.outfitReadyBadge}><Text style={styles.outfitReadyBadgeText}>LOOK REAL</Text></View>
+      </View>
+    );
+  }
   return (
     <View style={styles.outfitCollage}>
       {outfit.pieces.slice(0, 4).map((piece, index) => (
@@ -200,6 +218,7 @@ function OutfitVisual({ outfit, session }: { outfit: Outfit; session: CloudSessi
             : <Text style={styles.outfitCollageFallback}>✦</Text>}
         </View>
       ))}
+      <View style={styles.outfitPendingBadge}><Text style={styles.outfitPendingBadgeText}>FOTO PENDIENTE</Text></View>
     </View>
   );
 }
@@ -314,6 +333,7 @@ export default function App() {
   const [outfits, setOutfits] = useState<Outfit[]>([]);
   const [outfitsLoading, setOutfitsLoading] = useState(false);
   const [outfitGenerating, setOutfitGenerating] = useState(false);
+  const [outfitGenerationProgress, setOutfitGenerationProgress] = useState<{ current: number; total: number } | null>(null);
   const [duplicateCount, setDuplicateCount] = useState(0);
   const [wardrobeLoading, setWardrobeLoading] = useState(false);
   const [tryOnLayers, setTryOnLayers] = useState<TryOnLayer[]>([]);
@@ -463,11 +483,8 @@ export default function App() {
     try {
       const response = await cloudFetch(session, "/api/v1/outfits", { method: "GET" });
       if (!response.ok) return;
-      const result = await response.json() as { outfits?: Array<Omit<Outfit, "pieces"> & { pieces: CloudGarment[] }> };
-      setOutfits((result.outfits || []).map((outfit) => ({
-        ...outfit,
-        pieces: outfit.pieces.map((piece) => ({ ...piece, category: categoryForUi(piece.category) })),
-      })));
+      const result = await response.json() as { outfits?: CloudOutfit[] };
+      setOutfits(outfitsForUi(result.outfits || []));
     } finally {
       setOutfitsLoading(false);
     }
@@ -475,19 +492,33 @@ export default function App() {
 
   async function generateSavedOutfits() {
     if (!cloudSession || outfitGenerating) return;
+    if (!codexConnected) {
+      Alert.alert(
+        "Conecta ChatGPT para crear tus fotos",
+        "Las combinaciones se guardan sin costo de modelo. ChatGPT solo se utiliza para crear la foto real de ti usando cada Look.",
+        [
+          { text: "Ahora no", style: "cancel" },
+          { text: "Conectar", onPress: connectCodexExperiment },
+        ],
+      );
+      return;
+    }
     setOutfitGenerating(true);
     try {
+      const pendingOutfits = outfits.filter((outfit) => !outfit.renderPath).slice(0, 3);
+      if (pendingOutfits.length) {
+        await completeOutfitPhotographs(pendingOutfits);
+        return;
+      }
       const response = await cloudFetch(cloudSession, "/api/v1/outfits", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ count: 3 }),
       });
-      const result = await response.json() as { outfits?: Array<Omit<Outfit, "pieces"> & { pieces: CloudGarment[] }>; created?: number; error?: string };
+      const result = await response.json() as { outfits?: CloudOutfit[]; created?: number; createdOutfitIds?: string[]; error?: string };
+      const mappedOutfits = outfitsForUi(result.outfits || []);
       if (result.outfits) {
-        setOutfits(result.outfits.map((outfit) => ({
-          ...outfit,
-          pieces: outfit.pieces.map((piece) => ({ ...piece, category: categoryForUi(piece.category) })),
-        })));
+        setOutfits(mappedOutfits);
       }
       if (!response.ok) {
         if (result.error === "outfit_wardrobe_too_small") {
@@ -499,11 +530,130 @@ export default function App() {
         }
         return;
       }
-      Alert.alert("Looks guardados", `${result.created || 0} outfits nuevos se sincronizaron con tu nube privada.`);
-    } catch {
-      Alert.alert("No se crearon los Looks", "Tu armario sigue intacto. Vuelve a intentarlo cuando la cuenta esté sincronizada.");
+      const createdIds = new Set(result.createdOutfitIds || []);
+      const createdOutfits = createdIds.size
+        ? mappedOutfits.filter((outfit) => createdIds.has(outfit.id))
+        : mappedOutfits.filter((outfit) => !outfit.renderPath).slice(0, result.created || 3);
+      if (!createdOutfits.length) throw new Error("created_outfits_missing");
+      await completeOutfitPhotographs(createdOutfits);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "unknown";
+      Alert.alert("No se crearon los Looks", `Tu armario sigue intacto y las combinaciones guardadas se pueden reintentar. Detalle técnico: ${detail}`);
     } finally {
+      setOutfitGenerationProgress(null);
       setOutfitGenerating(false);
+    }
+  }
+
+  async function createOutfitPhotograph(outfit: Outfit) {
+    if (!cloudSession || outfitGenerating) return;
+    if (!codexConnected) {
+      Alert.alert(
+        "Conecta ChatGPT para crear esta foto",
+        "Vesta necesita la sesión experimental únicamente mientras te viste con las prendas seleccionadas.",
+        [
+          { text: "Ahora no", style: "cancel" },
+          { text: "Conectar", onPress: connectCodexExperiment },
+        ],
+      );
+      return;
+    }
+    setOutfitGenerating(true);
+    try {
+      await completeOutfitPhotographs([outfit]);
+    } finally {
+      setOutfitGenerationProgress(null);
+      setOutfitGenerating(false);
+    }
+  }
+
+  async function completeOutfitPhotographs(targets: Outfit[]) {
+    let completed = 0;
+    let failed = 0;
+    for (let index = 0; index < targets.length; index += 1) {
+      const outfit = targets[index];
+      setOutfitGenerationProgress({ current: index + 1, total: targets.length });
+      try {
+        const renderPath = await renderOutfitPhotograph(outfit);
+        const freshRenderPath = `${renderPath}?v=${Date.now()}`;
+        setOutfits((current) => current.map((entry) => entry.id === outfit.id
+          ? { ...entry, renderPath: freshRenderPath, status: "ready" }
+          : entry));
+        setSelectedOutfit((current) => current?.id === outfit.id
+          ? { ...current, renderPath: freshRenderPath, status: "ready" }
+          : current);
+        completed += 1;
+      } catch (error) {
+        failed += 1;
+        const detail = error instanceof Error ? error.message : "unknown";
+        if (/codex_not_connected|token_refresh|401/u.test(detail)) {
+          setCodexConnected(false);
+          failed += targets.length - index - 1;
+          break;
+        }
+      }
+    }
+    if (completed === targets.length) {
+      Alert.alert(
+        targets.length === 1 ? "Tu Look está listo" : "Tus Looks están listos",
+        targets.length === 1
+          ? "La foto tuya usando el outfit quedó guardada en tu nube privada."
+          : `${completed} fotos tuyas quedaron guardadas en tu nube privada. Abrirlas otra vez no vuelve a generar ni gastar.`,
+      );
+    } else if (completed > 0) {
+      Alert.alert("Looks parcialmente listos", `${completed} de ${targets.length} fotos quedaron listas. Las demás siguen pendientes y se pueden reintentar.`);
+    } else {
+      Alert.alert("Las fotos no terminaron", failed > 0
+        ? "Las combinaciones siguen guardadas. Revisa la conexión de ChatGPT y toca Crear fotos para reintentarlas."
+        : "Las combinaciones siguen guardadas y se pueden reintentar.");
+    }
+  }
+
+  async function renderOutfitPhotograph(outfit: Outfit) {
+    if (!cloudSession || !FileSystem.cacheDirectory) throw new Error("outfit_cloud_unavailable");
+    const temporaryPaths: string[] = [];
+    try {
+      if (!tryOnAvatarBase64.current) {
+        const avatarAsset = Image.resolveAssetSource(alanAvatarBase);
+        tryOnAvatarBase64.current = await FileSystem.readAsStringAsync(avatarAsset.uri, { encoding: FileSystem.EncodingType.Base64 });
+      }
+      const garmentInputs = [];
+      for (const item of outfit.pieces.filter((piece) => piece.imagePath && piece.imageKind === "cutout")) {
+        const cacheKey = `${item.id}:${item.imagePath}`;
+        let imageBase64 = tryOnGarmentBase64.current.get(cacheKey);
+        if (!imageBase64) {
+          const localPath = `${FileSystem.cacheDirectory}${TRY_ON_RENDER_PREFIX}-look-${item.id}.png`;
+          await FileSystem.deleteAsync(localPath, { idempotent: true }).catch(() => undefined);
+          const download = await FileSystem.downloadAsync(`${cloudSession.apiUrl}${item.imagePath}`, localPath, {
+            headers: {
+              "OAI-Sites-Authorization": `Bearer ${cloudSession.dispatchToken}`,
+              "x-vesta-device-token": cloudSession.deviceToken,
+            },
+            sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
+          });
+          if (download.status < 200 || download.status >= 300) throw new Error(`outfit_garment_download_${download.status}`);
+          temporaryPaths.push(download.uri);
+          imageBase64 = await FileSystem.readAsStringAsync(download.uri, { encoding: FileSystem.EncodingType.Base64 });
+          if (tryOnGarmentBase64.current.size >= 12) {
+            const oldestKey = tryOnGarmentBase64.current.keys().next().value;
+            if (oldestKey) tryOnGarmentBase64.current.delete(oldestKey);
+          }
+          tryOnGarmentBase64.current.set(cacheKey, imageBase64);
+        }
+        garmentInputs.push({
+          name: item.name,
+          type: item.type,
+          color: item.color,
+          description: item.description,
+          placement: imagePlacementFor(item),
+          imageBase64,
+        });
+      }
+      if (!garmentInputs.length) throw new Error("outfit_cutouts_missing");
+      const result = await generateExperimentalTryOnImage(tryOnAvatarBase64.current, garmentInputs, "low");
+      return await uploadOutfitRender(cloudSession, outfit.id, result);
+    } finally {
+      await Promise.all(temporaryPaths.map((path) => FileSystem.deleteAsync(path, { idempotent: true }).catch(() => undefined)));
     }
   }
 
@@ -1136,6 +1286,7 @@ export default function App() {
   const tryOnWardrobe = activeWardrobe.filter((item) => item.imagePath && item.imageKind === "cutout");
   const selectedTryOnSignature = tryOnSignatureFor(tryOnLayers);
   const tryOnHasPendingChanges = tryOnLayers.length > 0 && selectedTryOnSignature !== tryOnRenderedSignature;
+  const pendingOutfitCount = outfits.filter((outfit) => !outfit.renderPath).length;
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -1342,10 +1493,12 @@ export default function App() {
                     <Text style={styles.pageTitle}>Looks <Text style={styles.count}>{outfits.length}</Text></Text>
                   </View>
                   <Pressable style={[styles.importButton, outfitGenerating && styles.disabledButton]} onPress={generateSavedOutfits} disabled={outfitGenerating || !cloudSession}>
-                    <Text style={styles.importButtonText}>{outfitGenerating ? "CREANDO…" : "Generar　✦"}</Text>
+                    <Text style={styles.importButtonText}>{outfitGenerating
+                      ? outfitGenerationProgress ? `VISTIENDO ${outfitGenerationProgress.current}/${outfitGenerationProgress.total}…` : "PREPARANDO…"
+                      : pendingOutfitCount ? "Crear fotos　✦" : "Generar　✦"}</Text>
                   </Pressable>
                 </View>
-                <Text style={styles.looksIntro}>Vesta combina color, categoría y capas usando únicamente las prendas reales de tu armario.</Text>
+                <Text style={styles.looksIntro}>Vesta arma el outfit y crea una foto realista de ti usándolo. Cada imagen terminada se guarda para no volver a generarla al abrirla.</Text>
               </View>
             }
             ListEmptyComponent={
@@ -1359,7 +1512,7 @@ export default function App() {
                 <OutfitVisual outfit={item} session={cloudSession} />
                 <View style={styles.lookCopy}>
                   <Text style={styles.cardTitle}>{item.name}</Text>
-                  <Text style={styles.cardMeta}>{item.occasion} · {item.pieces.length} prendas</Text>
+                  <Text style={styles.cardMeta}>{item.occasion} · {item.pieces.length} prendas · {item.renderPath ? "foto lista" : "foto pendiente"}</Text>
                 </View>
               </Pressable>
             )}
@@ -1489,20 +1642,33 @@ export default function App() {
         <View style={styles.detailBackdrop}>
           <View style={styles.detailSheet}>
             <Pressable style={styles.closeButton} onPress={() => setSelectedOutfit(null)}><Text style={styles.closeText}>×</Text></Pressable>
-            {selectedOutfit && <OutfitVisual outfit={selectedOutfit} session={cloudSession} />}
-            {selectedOutfit && (
-              <View style={styles.detailCopy}>
-                <Text style={styles.eyebrow}>{selectedOutfit.occasion.toUpperCase()}</Text>
-                <Text style={styles.detailTitle}>{selectedOutfit.name}</Text>
-                <Text style={styles.detailIntro}>{selectedOutfit.note}</Text>
-                <View style={styles.outfitPieceList}>
-                  {selectedOutfit.pieces.map((piece) => <Text key={String(piece.id)} style={styles.outfitPieceName}>• {piece.name}</Text>)}
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {selectedOutfit && <OutfitVisual outfit={selectedOutfit} session={cloudSession} />}
+              {selectedOutfit && (
+                <View style={styles.detailCopy}>
+                  <Text style={styles.eyebrow}>{selectedOutfit.occasion.toUpperCase()}</Text>
+                  <Text style={styles.detailTitle}>{selectedOutfit.name}</Text>
+                  <Text style={styles.detailIntro}>{selectedOutfit.note}</Text>
+                  <View style={styles.outfitPieceList}>
+                    {selectedOutfit.pieces.map((piece) => <Text key={String(piece.id)} style={styles.outfitPieceName}>• {piece.name}</Text>)}
+                  </View>
+                  {!selectedOutfit.renderPath && (
+                    <Pressable
+                      style={[styles.fullButton, styles.reconstructAction, outfitGenerating && styles.disabledButton]}
+                      onPress={() => createOutfitPhotograph(selectedOutfit)}
+                      disabled={outfitGenerating}
+                    >
+                      <Text style={styles.fullButtonText}>{outfitGenerating && outfitGenerationProgress
+                        ? `Vistiéndote ${outfitGenerationProgress.current}/${outfitGenerationProgress.total}…`
+                        : "✦ Crear mi foto con este Look"}</Text>
+                    </Pressable>
+                  )}
+                  <Pressable style={styles.fullButton} onPress={() => trySavedOutfit(selectedOutfit)}>
+                    <Text style={styles.fullButtonText}>Editar este outfit en el probador</Text>
+                  </Pressable>
                 </View>
-                <Pressable style={styles.fullButton} onPress={() => trySavedOutfit(selectedOutfit)}>
-                  <Text style={styles.fullButtonText}>Probar este outfit</Text>
-                </Pressable>
-              </View>
-            )}
+              )}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -1554,10 +1720,15 @@ const styles = StyleSheet.create({
   cardRow: { gap: 9 },
   garmentCard: { flex: 1, position: "relative", marginBottom: 13, backgroundColor: paper, borderWidth: StyleSheet.hairlineWidth, borderColor: "transparent" },
   looksIntro: { color: muted, fontSize: 9, lineHeight: 14, marginTop: -7, marginBottom: 18, maxWidth: 310 },
-  outfitCollage: { position: "relative", width: "100%", aspectRatio: 0.82, overflow: "hidden", backgroundColor: "#E9E2D5" },
+  outfitCollage: { position: "relative", width: "100%", aspectRatio: 0.72, overflow: "hidden", backgroundColor: "#E9E2D5" },
   outfitCollageCell: { position: "absolute", width: "50%", height: "50%", alignItems: "center", justifyContent: "center", borderWidth: StyleSheet.hairlineWidth, borderColor: "rgba(216,209,196,.72)" },
   outfitCollageImage: { width: "92%", height: "92%" },
   outfitCollageFallback: { color: rust, fontSize: 17 },
+  outfitRenderImage: { width: "100%", height: "100%" },
+  outfitReadyBadge: { position: "absolute", left: 8, bottom: 8, paddingHorizontal: 8, paddingVertical: 5, borderRadius: 12, backgroundColor: "rgba(33,31,27,.78)" },
+  outfitReadyBadgeText: { color: paper, fontSize: 6, fontWeight: "900", letterSpacing: 0.9 },
+  outfitPendingBadge: { position: "absolute", left: 0, right: 0, bottom: 9, alignItems: "center" },
+  outfitPendingBadgeText: { color: paper, fontSize: 6, fontWeight: "900", letterSpacing: 0.8, paddingHorizontal: 9, paddingVertical: 6, borderRadius: 12, backgroundColor: "rgba(33,31,27,.78)" },
   spriteFrame: { width: "100%", overflow: "hidden", backgroundColor: paper },
   cloudGarmentImage: { width: "100%", height: "100%" },
   evidenceBadge: { position: "absolute", left: 6, bottom: 6, paddingHorizontal: 6, paddingVertical: 4, backgroundColor: "rgba(33,31,27,.78)" },
@@ -1772,6 +1943,36 @@ async function uploadExperimentalGarmentImage(session: CloudSession, garmentId: 
     if (response.status < 200 || response.status >= 300) {
       throw uploadResultError("generated_image", response.status, response.body);
     }
+  } finally {
+    await FileSystem.deleteAsync(localPath, { idempotent: true }).catch(() => undefined);
+  }
+}
+
+async function uploadOutfitRender(session: CloudSession, outfitId: string, base64: string) {
+  if (!FileSystem.cacheDirectory) throw new Error("image_cache_unavailable");
+  const localPath = `${FileSystem.cacheDirectory}vesta-outfit-${outfitId}.png`;
+  await FileSystem.writeAsStringAsync(localPath, base64, { encoding: FileSystem.EncodingType.Base64 });
+  try {
+    const response = await FileSystem.uploadAsync(
+      `${session.apiUrl}/api/v1/outfits/${outfitId}/render`,
+      localPath,
+      {
+        httpMethod: "PUT",
+        uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+        sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
+        headers: {
+          "Content-Type": "image/png",
+          "OAI-Sites-Authorization": `Bearer ${session.dispatchToken}`,
+          "x-vesta-device-token": session.deviceToken,
+        },
+      },
+    );
+    if (response.status < 200 || response.status >= 300) {
+      throw uploadResultError("outfit_render", response.status, response.body);
+    }
+    const payload = JSON.parse(response.body) as { renderPath?: string };
+    if (!payload.renderPath) throw new Error("outfit_render_path_missing");
+    return payload.renderPath;
   } finally {
     await FileSystem.deleteAsync(localPath, { idempotent: true }).catch(() => undefined);
   }

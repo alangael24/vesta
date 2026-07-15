@@ -49,8 +49,10 @@ export async function POST(request: Request) {
     }, { status: 409, headers: privateHeaders() });
   }
 
+  const createdOutfitIds: string[] = [];
   for (const suggestion of suggestions) {
     const outfitId = crypto.randomUUID();
+    createdOutfitIds.push(outfitId);
     await db.insert(outfits).values({
       id: outfitId,
       ownerId: identity.ownerId,
@@ -63,7 +65,11 @@ export async function POST(request: Request) {
     await db.insert(outfitItems).values(suggestion.garmentIds.map((garmentId, position) => ({ outfitId, garmentId, position })));
   }
 
-  return Response.json({ outfits: await listOwnerOutfits(identity.ownerId), created: suggestions.length }, { status: 201, headers: privateHeaders() });
+  return Response.json({
+    outfits: await listOwnerOutfits(identity.ownerId),
+    created: suggestions.length,
+    createdOutfitIds,
+  }, { status: 201, headers: privateHeaders() });
 }
 
 async function listOwnerOutfits(ownerId: string) {
@@ -72,6 +78,7 @@ async function listOwnerOutfits(ownerId: string) {
     name: outfits.name,
     occasion: outfits.occasion,
     rationale: outfits.rationale,
+    renderKey: outfits.renderKey,
     status: outfits.status,
     createdAt: outfits.createdAt,
     position: outfitItems.position,
@@ -96,6 +103,7 @@ async function listOwnerOutfits(ownerId: string) {
     name: string;
     occasion: string;
     note: string;
+    renderPath: string | null;
     status: string;
     pieces: Array<Record<string, unknown>>;
   }>();
@@ -105,6 +113,7 @@ async function listOwnerOutfits(ownerId: string) {
       name: row.name,
       occasion: row.occasion,
       note: row.rationale,
+      renderPath: row.renderKey ? `/api/v1/media/outfits/${row.id}` : null,
       status: row.status,
       pieces: [],
     };
