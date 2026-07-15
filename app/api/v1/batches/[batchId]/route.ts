@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { getDb } from "@/db";
-import { importBatches, processingJobs } from "@/db/schema";
+import { importBatches, processingJobs, sourcePhotos } from "@/db/schema";
 import { requireDevice } from "@/lib/device-auth";
 
 type RouteContext = { params: Promise<{ batchId: string }> };
@@ -18,6 +18,21 @@ export async function GET(request: Request, context: RouteContext) {
     eq(processingJobs.batchId, batchId),
     eq(processingJobs.ownerId, identity.ownerId),
   ));
-  return Response.json({ batch, jobs }, { headers: { "Cache-Control": "private, no-store" } });
+  const photos = await getDb().select({
+    id: sourcePhotos.id,
+    filename: sourcePhotos.filename,
+    contentType: sourcePhotos.contentType,
+    sizeBytes: sourcePhotos.sizeBytes,
+    width: sourcePhotos.width,
+    height: sourcePhotos.height,
+    status: sourcePhotos.status,
+  }).from(sourcePhotos).where(and(
+    eq(sourcePhotos.batchId, batchId),
+    eq(sourcePhotos.ownerId, identity.ownerId),
+  ));
+  return Response.json({
+    batch,
+    jobs,
+    photos: photos.map((photo) => ({ ...photo, downloadPath: `/api/v1/media/photos/${photo.id}` })),
+  }, { headers: { "Cache-Control": "private, no-store" } });
 }
-

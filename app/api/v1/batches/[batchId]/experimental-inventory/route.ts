@@ -153,8 +153,8 @@ function isInventoryResults(value: unknown): value is InventoryResult[] {
       if (!isRecord(garment)) return false;
       if (!shortString(garment.candidate_key, 120) || !shortString(garment.name, 100)) return false;
       if (!shortString(garment.category, 24) || !categories.has(garment.category)) return false;
-      if (!shortString(garment.type, 80) || !shortString(garment.color, 80)) return false;
-      if (!shortString(garment.material, 80) || !shortString(garment.description, 500)) return false;
+      if (!shortString(garment.type, 80) || !boundedString(garment.color, 80)) return false;
+      if (!boundedString(garment.material, 80) || !boundedString(garment.description, 500)) return false;
       if (!integerBetween(garment.confidence, 0, 100)) return false;
       if (!shortString(garment.visibility, 16) || !visibilities.has(garment.visibility)) return false;
       if (!Array.isArray(garment.evidence) || garment.evidence.length < 1 || garment.evidence.length > 40) return false;
@@ -174,6 +174,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function shortString(value: unknown, maximum: number): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.length <= maximum;
+}
+
+function boundedString(value: unknown, maximum: number): value is string {
+  return typeof value === "string" && value.length <= maximum;
 }
 
 function integerBetween(value: unknown, minimum: number, maximum: number): value is number {

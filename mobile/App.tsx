@@ -192,6 +192,7 @@ export default function App() {
   const [builderItems, setBuilderItems] = useState<ItemId[]>([2, 9]);
   const [occasion, setOccasion] = useState("Diario");
   const automaticCloudConnectionStarted = useRef(false);
+  const pendingAnalysisOffered = useRef(false);
 
   const activeWardrobe = cloudWardrobe;
 
@@ -285,6 +286,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!cloudSession || !codexConnected || pendingAnalysisOffered.current) return;
+    pendingAnalysisOffered.current = true;
+    offerPendingExperimentalAnalysis(cloudSession).catch(() => undefined);
+  }, [cloudSession?.apiUrl, cloudSession?.deviceToken, codexConnected]);
+
+  useEffect(() => {
     if (!cloudSession) {
       setCloudWardrobe([]);
       return;
@@ -308,6 +315,63 @@ export default function App() {
       return items;
     } finally {
       setWardrobeLoading(false);
+    }
+  }
+
+  async function offerPendingExperimentalAnalysis(session: CloudSession) {
+    const batchesResponse = await cloudFetch(session, "/api/v1/batches", { method: "GET" });
+    if (!batchesResponse.ok) return;
+    const payload = await batchesResponse.json() as { batches?: Array<{ id: string; status: string }> };
+    const pendingBatch = payload.batches?.find((batch) => batch.status === "uploaded");
+    if (!pendingBatch) return;
+
+    Alert.alert(
+      "Análisis pendiente",
+      "Vesta encontró las fotos que ya subiste. Puedes reintentar el análisis sin volver a cargarlas.",
+      [
+        { text: "Después", style: "cancel" },
+        { text: "Reintentar ahora", onPress: () => retryCloudBatch(session, pendingBatch.id) },
+      ],
+    );
+  }
+
+  async function retryCloudBatch(session: CloudSession, batchId: string) {
+    try {
+      const response = await cloudFetch(session, `/api/v1/batches/${batchId}`, { method: "GET" });
+      if (!response.ok) throw await uploadError("pending_batch", response);
+      const payload = await response.json() as {
+        photos?: Array<{ id: string; filename: string; contentType: string; sizeBytes: number; width: number | null; height: number | null; downloadPath: string }>;
+      };
+      if (!payload.photos?.length || !FileSystem.cacheDirectory) throw new Error("pending_photos_missing");
+      const selectedPhotos: ExperimentalPhoto[] = [];
+      for (const photo of payload.photos) {
+        const extension = photo.filename.split(".").pop()?.replace(/[^a-z0-9]/giu, "") || "jpg";
+        const localPath = `${FileSystem.cacheDirectory}vesta-${photo.id}.${extension}`;
+        const download = await FileSystem.downloadAsync(`${session.apiUrl}${photo.downloadPath}`, localPath, {
+          headers: {
+            "OAI-Sites-Authorization": `Bearer ${session.dispatchToken}`,
+            "x-vesta-device-token": session.deviceToken,
+          },
+          sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
+        });
+        if (download.status < 200 || download.status >= 300) throw new Error(`download_${download.status}`);
+        selectedPhotos.push({
+          id: photo.id,
+          asset: {
+            uri: download.uri,
+            width: photo.width || 1600,
+            height: photo.height || 1600,
+            fileName: photo.filename,
+            fileSize: photo.sizeBytes,
+            mimeType: photo.contentType,
+            type: "image",
+          },
+        });
+      }
+      await startExperimentalProcessing(batchId, selectedPhotos);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "unknown";
+      Alert.alert("No se pudo recuperar el lote", `Tus originales siguen seguros. Detalle técnico: ${detail}`);
     }
   }
 
@@ -509,10 +573,11 @@ export default function App() {
         "Inventario experimental listo",
         `Vesta detectó ${result.garmentCount ?? 0} prendas con tu suscripción de ChatGPT. Revísalas: esta modalidad todavía no deduplica ni crea PNG transparentes.`,
       );
-    } catch {
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "unknown";
       Alert.alert(
         "La prueba no terminó",
-        "Tus originales siguen en tu nube privada. Si la sesión de ChatGPT expiró, vuelve a conectarla desde tu perfil y repite con un lote nuevo.",
+        `Tus originales siguen en tu nube privada y el lote se puede reintentar sin subirlos otra vez. Detalle técnico: ${detail}`,
       );
     } finally {
       setExperimentalProgress(0);
