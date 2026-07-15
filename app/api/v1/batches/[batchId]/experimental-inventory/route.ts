@@ -15,6 +15,10 @@ type ExperimentalPayload = {
   consent?: boolean;
   results?: unknown;
   usage?: unknown;
+  incremental?: boolean;
+  final?: boolean;
+  chunkIndex?: number;
+  chunkTotal?: number;
 };
 
 type ExperimentalUsage = {
@@ -60,36 +64,48 @@ export async function POST(request: Request, context: RouteContext) {
     return Response.json({ error: "batch_not_ready" }, { status: 409 });
   }
 
-  const [existing] = await db.select({ value: count() }).from(garments).where(and(
-    eq(garments.ownerId, identity.ownerId),
-    eq(garments.batchId, batchId),
-  ));
-  if ((existing?.value ?? 0) > 0) {
-    return Response.json({ ok: true, status: "review", garmentCount: existing.value, alreadyPersisted: true });
-  }
-
   const [job] = await db.select().from(processingJobs).where(and(
     eq(processingJobs.batchId, batchId),
     eq(processingJobs.ownerId, identity.ownerId),
     eq(processingJobs.kind, "inventory"),
   )).limit(1);
   if (!job) return Response.json({ error: "inventory_job_not_found" }, { status: 409 });
-  if (job.status === "running") return Response.json({ error: "inventory_already_running" }, { status: 409 });
+  const incremental = payload.incremental === true;
+  const final = !incremental || payload.final === true;
+  if (incremental && (
+    !integerBetween(payload.chunkIndex, 1, 10) ||
+    !integerBetween(payload.chunkTotal, 1, 10) ||
+    Number(payload.chunkIndex) > Number(payload.chunkTotal)
+  )) {
+    return Response.json({ error: "invalid_incremental_inventory" }, { status: 400 });
+  }
+  if (job.status === "completed") {
+    const [existing] = await db.select({ value: count() }).from(garments).where(and(
+      eq(garments.ownerId, identity.ownerId),
+      eq(garments.batchId, batchId),
+    ));
+    return Response.json({ ok: true, status: "review", garmentCount: existing?.value ?? 0, garments: [], alreadyPersisted: true });
+  }
+  if (job.status === "running" && !incremental) return Response.json({ error: "inventory_already_running" }, { status: 409 });
 
   const now = new Date().toISOString();
-  await db.batch([
-    db.update(importBatches).set({ status: "processing", processingApprovedAt: now, updatedAt: now }).where(eq(importBatches.id, batchId)),
-    db.update(processingJobs).set({
-      status: "running",
-      progress: 70,
-      attempts: job.attempts + 1,
-      model: payload.model,
-      errorCode: null,
-      errorMessage: null,
-      startedAt: now,
-      updatedAt: now,
-    }).where(eq(processingJobs.id, job.id)),
-  ]);
+  if (job.status !== "running") {
+    await db.batch([
+      db.update(importBatches).set({ status: "processing", processingApprovedAt: now, updatedAt: now }).where(eq(importBatches.id, batchId)),
+      db.update(processingJobs).set({
+        status: "running",
+        progress: incremental ? 10 : 70,
+        attempts: job.attempts + 1,
+        model: payload.model,
+        inputTokens: 0,
+        outputTokens: 0,
+        errorCode: null,
+        errorMessage: null,
+        startedAt: now,
+        updatedAt: now,
+      }).where(eq(processingJobs.id, job.id)),
+    ]);
+  }
 
   try {
     const photos = await db.select().from(sourcePhotos).where(and(
@@ -106,7 +122,28 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const persisted = await persistExperimentalInventory(identity.ownerId, batchId, photos, payload.results);
-    const garmentCount = persisted.garmentCount;
+    const inputTokens = (job.status === "running" ? job.inputTokens ?? 0 : 0) + payload.usage.inputTokens;
+    const outputTokens = (job.status === "running" ? job.outputTokens ?? 0 : 0) + payload.usage.outputTokens;
+    const [inventoryTotal] = await db.select({ value: count() }).from(garments).where(and(
+      eq(garments.ownerId, identity.ownerId),
+      eq(garments.batchId, batchId),
+    ));
+    const garmentCount = inventoryTotal?.value ?? persisted.garmentCount;
+    if (!final) {
+      const progress = 10 + Math.round((Number(payload.chunkIndex) / Number(payload.chunkTotal)) * 75);
+      await db.batch([
+        db.update(processingJobs).set({
+          status: "running",
+          progress,
+          model: payload.model,
+          inputTokens,
+          outputTokens,
+          updatedAt: new Date().toISOString(),
+        }).where(eq(processingJobs.id, job.id)),
+        db.update(importBatches).set({ status: "processing", updatedAt: new Date().toISOString() }).where(eq(importBatches.id, batchId)),
+      ]);
+      return Response.json({ ok: true, status: "processing", partial: true, garmentCount, garments: persisted.garments });
+    }
     const completedAt = new Date().toISOString();
     await db.batch([
       db.update(processingJobs).set({
@@ -114,8 +151,8 @@ export async function POST(request: Request, context: RouteContext) {
         progress: 100,
         model: payload.model,
         resultJson: JSON.stringify({ garmentCount, chunks: payload.results.length, provider: payload.provider, usage: payload.usage }),
-        inputTokens: payload.usage.inputTokens,
-        outputTokens: payload.usage.outputTokens,
+        inputTokens,
+        outputTokens,
         completedAt,
         updatedAt: completedAt,
       }).where(eq(processingJobs.id, job.id)),

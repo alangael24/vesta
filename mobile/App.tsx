@@ -154,6 +154,23 @@ type CloudAvatar = {
 
 type CloudOutfit = Omit<Outfit, "pieces"> & { pieces: CloudGarment[] };
 
+type ImportStage = "idle" | "waiting" | "staging" | "uploading" | "analyzing" | "complete" | "error";
+
+type QueuedImportPhoto = {
+  asset: ImagePicker.ImagePickerAsset;
+  uploadId?: string;
+  uploadPath?: string;
+  uploaded: boolean;
+};
+
+type PendingImportQueue = {
+  version: 1;
+  id: string;
+  batchId?: string;
+  photos: QueuedImportPhoto[];
+  updatedAt: string;
+};
+
 const cloudKeys = {
   apiUrl: "vesta.api-url",
   dispatchToken: "vesta.dispatch-token",
@@ -162,6 +179,104 @@ const cloudKeys = {
 };
 const CLOUD_CONNECT_URL = "https://vesta-armario-alan.alangael2411.chatgpt.site/api/v1/pairing";
 const TRY_ON_RENDER_PREFIX = "vesta-try-on-render";
+const IMPORT_QUEUE_MANIFEST = "vesta-import-queue.json";
+const IMPORT_UPLOAD_CONCURRENCY = 3;
+
+function importQueueManifestPath() {
+  return FileSystem.documentDirectory ? `${FileSystem.documentDirectory}${IMPORT_QUEUE_MANIFEST}` : null;
+}
+
+function importQueueDirectory(queueId: string) {
+  return FileSystem.documentDirectory ? `${FileSystem.documentDirectory}vesta-import-${queueId}/` : null;
+}
+
+async function persistImportQueue(queue: PendingImportQueue) {
+  const path = importQueueManifestPath();
+  if (!path) return;
+  await FileSystem.writeAsStringAsync(path, JSON.stringify(queue));
+}
+
+async function readImportQueue() {
+  const path = importQueueManifestPath();
+  if (!path) return null;
+  try {
+    const info = await FileSystem.getInfoAsync(path);
+    if (!info.exists) return null;
+    const parsed = JSON.parse(await FileSystem.readAsStringAsync(path)) as PendingImportQueue;
+    if (parsed.version !== 1 || !parsed.id || !Array.isArray(parsed.photos) || !parsed.photos.length) return null;
+    const available: QueuedImportPhoto[] = [];
+    for (const photo of parsed.photos) {
+      const local = await FileSystem.getInfoAsync(photo.asset?.uri || "").catch(() => null);
+      if (local?.exists) available.push(photo);
+    }
+    if (available.length !== parsed.photos.length) {
+      await clearImportQueue(parsed);
+      return null;
+    }
+    return { ...parsed, photos: available };
+  } catch {
+    return null;
+  }
+}
+
+async function clearImportQueue(queue?: PendingImportQueue | null) {
+  const path = importQueueManifestPath();
+  if (path) await FileSystem.deleteAsync(path, { idempotent: true }).catch(() => undefined);
+  if (queue) {
+    const directory = importQueueDirectory(queue.id);
+    if (directory) await FileSystem.deleteAsync(directory, { idempotent: true }).catch(() => undefined);
+  }
+}
+
+async function stageImportQueue(assets: ImagePicker.ImagePickerAsset[]) {
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const directory = importQueueDirectory(id);
+  if (!directory) throw new Error("import_storage_unavailable");
+  await FileSystem.makeDirectoryAsync(directory, { intermediates: true });
+  const queued: QueuedImportPhoto[] = [];
+  try {
+    for (let index = 0; index < assets.length; index += 1) {
+      const source = assets[index];
+      const extension = extensionFor(source);
+      const uri = `${directory}photo-${index + 1}.${extension}`;
+      await FileSystem.copyAsync({ from: source.uri, to: uri });
+      const info = await FileSystem.getInfoAsync(uri);
+      const fileSize = source.fileSize || (info.exists && "size" in info ? info.size : undefined);
+      if (!fileSize) throw new Error("import_photo_size_unavailable");
+      queued.push({
+        asset: {
+          uri,
+          width: source.width,
+          height: source.height,
+          type: "image",
+          fileName: source.fileName || `foto-${index + 1}.${extension}`,
+          fileSize,
+          mimeType: mimeTypeFor(source),
+          assetId: source.assetId,
+        },
+        uploaded: false,
+      });
+    }
+    const queue: PendingImportQueue = { version: 1, id, photos: queued, updatedAt: new Date().toISOString() };
+    await persistImportQueue(queue);
+    return queue;
+  } catch (error) {
+    await FileSystem.deleteAsync(directory, { idempotent: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function runImportPool<T>(values: T[], worker: (value: T, index: number) => Promise<void>) {
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(IMPORT_UPLOAD_CONCURRENCY, values.length) }, async () => {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      await worker(values[index], index);
+    }
+  });
+  await Promise.all(workers);
+}
 
 function outfitsForUi(values: CloudOutfit[]) {
   return values.map((outfit) => ({
@@ -512,7 +627,9 @@ export default function App() {
   const [selectedOutfit, setSelectedOutfit] = useState<Outfit | null>(null);
   const [peekedOutfit, setPeekedOutfit] = useState<Outfit | null>(null);
   const [photos, setPhotos] = useState<ImagePicker.ImagePickerAsset[]>([]);
-  const [batchReady, setBatchReady] = useState(false);
+  const [pendingImport, setPendingImport] = useState<PendingImportQueue | null>(null);
+  const [importStage, setImportStage] = useState<ImportStage>("idle");
+  const [importMessage, setImportMessage] = useState("");
   const [picking, setPicking] = useState(false);
   const [pairing, setPairing] = useState(false);
   const [cloudSession, setCloudSession] = useState<CloudSession | null>(null);
@@ -546,6 +663,7 @@ export default function App() {
   const avatarDraftBase64 = useRef<string | null>(null);
   const tryOnGarmentBase64 = useRef(new Map<string, string>());
   const automaticCloudConnectionStarted = useRef(false);
+  const importResumeStarted = useRef(false);
   const pendingAnalysisOffered = useRef(false);
   const avatarOnboardingOffered = useRef(false);
   const legacyAvatarMigrationStarted = useRef(false);
@@ -640,6 +758,22 @@ export default function App() {
   useEffect(() => {
     getCodexSession().then((session) => setCodexConnected(Boolean(session))).catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    readImportQueue().then((queue) => {
+      if (!queue) return;
+      setPendingImport(queue);
+      setPhotos(queue.photos.map((photo) => photo.asset));
+      setImportMessage("Continuaremos la importación desde la última foto pendiente.");
+      setImportStage("waiting");
+    }).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (!cloudSession || !pendingImport || importStage !== "waiting" || importResumeStarted.current) return;
+    importResumeStarted.current = true;
+    uploadBatch(pendingImport).catch(() => undefined);
+  }, [cloudSession?.apiUrl, cloudSession?.deviceToken, importStage, pendingImport?.id]);
 
   useEffect(() => {
     if (!cloudSession || !codexConnected || pendingAnalysisOffered.current) return;
@@ -1039,15 +1173,9 @@ export default function App() {
     const payload = await batchesResponse.json() as { batches?: Array<{ id: string; status: string }> };
     const pendingBatch = payload.batches?.find((batch) => batch.status === "uploaded" || batch.status === "failed");
     if (!pendingBatch) return;
-
-    Alert.alert(
-      "Análisis pendiente",
-      "Outfit Club encontró las fotos que ya subiste. Puedes reintentar el análisis sin volver a cargarlas.",
-      [
-        { text: "Después", style: "cancel" },
-        { text: "Reintentar ahora", onPress: () => retryCloudBatch(session, pendingBatch.id) },
-      ],
-    );
+    setImportStage("analyzing");
+    setImportMessage("Reanudando el análisis pendiente…");
+    await retryCloudBatch(session, pendingBatch.id);
   }
 
   async function retryCloudBatch(session: CloudSession, batchId: string) {
@@ -1067,7 +1195,7 @@ export default function App() {
             "OAI-Sites-Authorization": `Bearer ${session.dispatchToken}`,
             "x-vesta-device-token": session.deviceToken,
           },
-          sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
+          sessionType: FileSystem.FileSystemSessionType.BACKGROUND,
         });
         if (download.status < 200 || download.status >= 300) throw new Error(`download_${download.status}`);
         selectedPhotos.push({
@@ -1083,10 +1211,17 @@ export default function App() {
           },
         });
       }
-      await startExperimentalProcessing(batchId, selectedPhotos);
+      const completed = await startExperimentalProcessing(batchId, selectedPhotos);
+      if (completed && pendingImport?.batchId === batchId) {
+        await clearImportQueue(pendingImport);
+        setPendingImport(null);
+        setPhotos([]);
+      }
     } catch (error) {
       const detail = error instanceof Error ? error.message : "unknown";
-      Alert.alert("No se pudo recuperar el lote", `Tus originales siguen seguros. Detalle técnico: ${detail}`);
+      console.info("[Outfit Club pending analysis]", detail);
+      setImportStage("error");
+      setImportMessage("No pudimos reanudar el análisis todavía. Tus fotos siguen seguras en tu cuenta.");
     }
   }
 
@@ -1107,9 +1242,25 @@ export default function App() {
         base64: false,
       });
       if (!result.canceled) {
-        setPhotos(result.assets);
-        setBatchReady(false);
+        setImportStage("staging");
+        setImportMessage("Preparando tus fotos de forma segura…");
+        if (pendingImport) await clearImportQueue(pendingImport);
+        const queue = await stageImportQueue(result.assets);
+        setPendingImport(queue);
+        setPhotos(queue.photos.map((photo) => photo.asset));
+        setImportOpen(false);
+        setImportMessage(cloudSession ? "Subiendo tus fotos…" : "Esperando la conexión privada…");
+        setImportStage("waiting");
+        importResumeStarted.current = false;
+        if (cloudSession) {
+          importResumeStarted.current = true;
+          await uploadBatch(queue);
+        }
       }
+    } catch (error) {
+      console.info("[Outfit Club import staging]", error instanceof Error ? error.message : "unknown");
+      setImportStage("error");
+      setImportMessage("No pudimos preparar estas fotos. Tus originales siguen intactos; inténtalo otra vez.");
     } finally {
       setPicking(false);
     }
@@ -1293,12 +1444,6 @@ export default function App() {
     }
   };
 
-  const prepareBatch = () => {
-    setBatchReady(true);
-    setImportOpen(false);
-    Alert.alert("Lote local preparado", "Tus fotos siguen únicamente en este teléfono hasta que pulses “Subir a mi nube privada”.");
-  };
-
   const connectCodexExperiment = async () => {
     if (codexConnecting) return;
     setCodexConnecting(true);
@@ -1332,9 +1477,14 @@ export default function App() {
     Alert.alert("ChatGPT desconectado", "Los tokens experimentales se eliminaron del Keychain.");
   };
 
-  const uploadBatch = async () => {
+  const uploadBatch = async (queueOverride?: PendingImportQueue) => {
+    const initialQueue = queueOverride || pendingImport;
+    if (!initialQueue) return;
+    let queue: PendingImportQueue = initialQueue;
     if (!cloudSession) {
       setImportOpen(false);
+      setImportStage("waiting");
+      setImportMessage("Esperando la conexión privada para continuar automáticamente…");
       if (!automaticCloudConnectionStarted.current) {
         automaticCloudConnectionStarted.current = true;
         setPairing(true);
@@ -1343,83 +1493,122 @@ export default function App() {
           setPairing(false);
         });
       }
-      Alert.alert("Preparando tu cuenta", "Outfit Club terminará la configuración privada y volverá automáticamente.");
-      return;
-    }
-    if (photos.some((photo) => !photo.fileSize)) {
-      Alert.alert("No se pudo leer el tamaño", "Vuelve a elegir estas fotos para preparar una subida segura.");
       return;
     }
 
     setUploading(true);
+    setImportStage("uploading");
+    setImportMessage("Subiendo tus fotos en segundo plano…");
     setUploadProgress(0);
     try {
-      const manifest = photos.map((photo, index) => ({
-        filename: photo.fileName || `foto-${index + 1}.${extensionFor(photo)}`,
-        contentType: mimeTypeFor(photo),
-        sizeBytes: photo.fileSize,
-        width: photo.width,
-        height: photo.height,
-      }));
-      const batchResponse = await cloudFetch(cloudSession, "/api/v1/batches", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ photos: manifest, originalsPolicy: "retain_private" }),
-      });
-      if (!batchResponse.ok) throw await uploadError("batch", batchResponse);
-      const batch = await batchResponse.json() as { batchId: string; photos: Array<{ id: string; uploadPath: string }> };
-
-      for (let index = 0; index < photos.length; index += 1) {
-        const uploadResponse = await FileSystem.uploadAsync(
-          `${cloudSession.apiUrl}${batch.photos[index].uploadPath}`,
-          photos[index].uri,
-          {
-            httpMethod: "PUT",
-            uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
-            sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
-            headers: {
-              "Content-Type": manifest[index].contentType,
-              "OAI-Sites-Authorization": `Bearer ${cloudSession.dispatchToken}`,
-              "x-vesta-device-token": cloudSession.deviceToken,
-            },
-          },
-        );
-        if (uploadResponse.status < 200 || uploadResponse.status >= 300) {
-          throw uploadResultError(`photo_${index + 1}`, uploadResponse.status, uploadResponse.body);
+      if (queue.batchId) {
+        const resumeResponse = await cloudFetch(cloudSession, `/api/v1/batches/${queue.batchId}`, { method: "GET" });
+        if (resumeResponse.ok) {
+          const resume = await resumeResponse.json() as { photos?: Array<{ id: string; status: string }> };
+          const uploadedIds = new Set((resume.photos || []).filter((photo) => photo.status !== "awaiting_upload").map((photo) => photo.id));
+          queue = {
+            ...queue,
+            photos: queue.photos.map((photo) => ({ ...photo, uploaded: Boolean(photo.uploadId && uploadedIds.has(photo.uploadId)) })),
+            updatedAt: new Date().toISOString(),
+          };
+          setPendingImport(queue);
+          await persistImportQueue(queue);
         }
-        setUploadProgress(Math.round(((index + 1) / photos.length) * 100));
       }
 
-      setBatchReady(false);
-      setImportOpen(false);
-      const uploadedCount = photos.length;
-      const experimentalPhotos: ExperimentalPhoto[] = photos.map((asset, index) => ({
-        id: batch.photos[index].id,
-        asset,
+      const manifest = queue.photos.map((photo, index) => ({
+        filename: photo.asset.fileName || `foto-${index + 1}.${extensionFor(photo.asset)}`,
+        contentType: mimeTypeFor(photo.asset),
+        sizeBytes: photo.asset.fileSize,
+        width: photo.asset.width,
+        height: photo.asset.height,
       }));
-      setPhotos([]);
-      if (codexConnected) {
-        Alert.alert(
-          "Fotos guardadas en tu nube",
-          `${uploadedCount} fotos ya están privadas en Outfit Club. Para esta prueba, las copias reducidas se enviarán directamente desde tu iPhone al endpoint de Codex asociado a tu suscripción de ChatGPT. Los tokens nunca pasarán por la nube de Outfit Club.`,
-          [
-            { text: "Analizar después", style: "cancel" },
-            { text: "Usar ChatGPT (prueba)", onPress: () => startExperimentalProcessing(batch.batchId, experimentalPhotos) },
-          ],
-        );
-        return;
+
+      if (!queue.batchId) {
+        const batchResponse = await cloudFetch(cloudSession, "/api/v1/batches", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ photos: manifest, originalsPolicy: "retain_private" }),
+        });
+        if (!batchResponse.ok) throw await uploadError("batch", batchResponse);
+        const batch = await batchResponse.json() as { batchId: string; photos: Array<{ id: string; uploadPath: string }> };
+        queue = {
+          ...queue,
+          batchId: batch.batchId,
+          photos: queue.photos.map((photo, index) => ({
+            ...photo,
+            uploadId: batch.photos[index].id,
+            uploadPath: batch.photos[index].uploadPath,
+          })),
+          updatedAt: new Date().toISOString(),
+        };
+        setPendingImport(queue);
+        await persistImportQueue(queue);
       }
-      Alert.alert(
-        "Fotos guardadas en tu nube",
-        `${uploadedCount} fotos ya están privadas en Outfit Club. Para detectar prendas se enviarán copias reducidas a la API de OpenAI. No se usan para entrenar por defecto; sus registros de seguridad pueden conservarse hasta 30 días. ¿Qué prefieres?`,
-        [
-          { text: "Analizar después", style: "cancel" },
-          { text: "Económico", onPress: () => startProcessing(batch.batchId, "economy") },
-          { text: "Máxima precisión", onPress: () => startProcessing(batch.batchId, "quality") },
-        ],
-      );
+
+      const completedIds = new Set(queue.photos.filter((photo) => photo.uploaded && photo.uploadId).map((photo) => photo.uploadId!));
+      setUploadProgress(Math.round((completedIds.size / queue.photos.length) * 100));
+      const remaining = queue.photos.filter((photo) => !photo.uploaded);
+      await runImportPool(remaining, async (photo) => {
+        if (!photo.uploadId || !photo.uploadPath) throw new Error("import_upload_path_missing");
+        let uploaded = false;
+        let lastError: Error | null = null;
+        for (let attempt = 0; attempt < 2 && !uploaded; attempt += 1) {
+          try {
+            const uploadResponse = await FileSystem.uploadAsync(
+              `${cloudSession.apiUrl}${photo.uploadPath}`,
+              photo.asset.uri,
+              {
+                httpMethod: "PUT",
+                uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+                sessionType: FileSystem.FileSystemSessionType.BACKGROUND,
+                headers: {
+                  "Content-Type": mimeTypeFor(photo.asset),
+                  "OAI-Sites-Authorization": `Bearer ${cloudSession.dispatchToken}`,
+                  "x-vesta-device-token": cloudSession.deviceToken,
+                },
+              },
+            );
+            if (uploadResponse.status < 200 || uploadResponse.status >= 300) {
+              throw uploadResultError("photo", uploadResponse.status, uploadResponse.body);
+            }
+            uploaded = true;
+          } catch (error) {
+            lastError = error instanceof Error ? error : new Error("photo_upload_failed");
+          }
+        }
+        if (!uploaded) throw lastError || new Error("photo_upload_failed");
+        completedIds.add(photo.uploadId);
+        queue = {
+          ...queue,
+          photos: queue.photos.map((entry) => ({ ...entry, uploaded: Boolean(entry.uploadId && completedIds.has(entry.uploadId)) })),
+          updatedAt: new Date().toISOString(),
+        };
+        setPendingImport(queue);
+        setUploadProgress(Math.round((completedIds.size / queue.photos.length) * 100));
+        await persistImportQueue(queue);
+      });
+
+      setImportOpen(false);
+      setImportStage("analyzing");
+      setImportMessage("Buscando prendas claras y evitando duplicados…");
+      const experimentalPhotos: ExperimentalPhoto[] = queue.photos.map((photo) => ({
+        id: photo.uploadId!,
+        asset: photo.asset,
+      }));
+      const completed = codexConnected
+        ? await startExperimentalProcessing(queue.batchId!, experimentalPhotos)
+        : await startProcessing(queue.batchId!, "economy");
+      if (completed) {
+        await clearImportQueue(queue);
+        setPendingImport(null);
+        setPhotos([]);
+      }
     } catch (error) {
       const detail = error instanceof Error ? error.message : "unknown";
+      console.info("[Outfit Club import upload]", detail);
+      setImportStage("error");
+      setImportMessage("La importación se pausó. Tus fotos están seguras y puedes continuar sin elegirlas otra vez.");
       if (detail.includes("_401_") || detail.includes("_403_")) {
         await Promise.all(Object.values(cloudKeys).map((key) => SecureStore.deleteItemAsync(key)));
         setCloudSession(null);
@@ -1429,49 +1618,64 @@ export default function App() {
           automaticCloudConnectionStarted.current = false;
           setPairing(false);
         });
-        Alert.alert("Actualizando tu cuenta", "La credencial privada había expirado. Outfit Club la está renovando automáticamente; tus fotos siguen en el teléfono.");
-      } else {
-        Alert.alert("La subida se interrumpió", `Tus fotos locales siguen intactas. Detalle técnico: ${detail}`);
       }
     } finally {
       setUploading(false);
+      importResumeStarted.current = false;
     }
   };
 
   const startExperimentalProcessing = async (batchId: string, selectedPhotos: ExperimentalPhoto[]) => {
-    if (!cloudSession || processing) return;
+    if (!cloudSession || processing) return false;
     setProcessing(true);
+    setImportStage("analyzing");
+    setImportMessage("Detectando únicamente prendas visibles con claridad…");
     setExperimentalProgress(0);
     try {
-      const analysis = await analyzeExperimentalInventory(selectedPhotos, (completed, total) => {
+      const persistedByCandidate = new Map<string, { id: string; candidateKey: string }>();
+      let detectedGarmentCount = 0;
+      const analysis = await analyzeExperimentalInventory(selectedPhotos, async (completed, total, chunkResult, chunkUsage) => {
         setExperimentalProgress(Math.round((completed / total) * 70));
+        const response = await cloudFetch(cloudSession, `/api/v1/batches/${batchId}/experimental-inventory`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "chatgpt-codex-experimental",
+            model: EXPERIMENTAL_CODEX_MODEL,
+            consent: true,
+            results: [chunkResult],
+            usage: chunkUsage,
+            incremental: true,
+            final: completed === total,
+            chunkIndex: completed,
+            chunkTotal: total,
+          }),
+        });
+        const partial = await response.json() as {
+          error?: string;
+          detail?: string;
+          garmentCount?: number;
+          garments?: Array<{ id: string; candidateKey: string }>;
+        };
+        if (!response.ok) throw new Error(partial.detail ? `${partial.error || "experimental_inventory_failed"}: ${partial.detail}` : partial.error || "experimental_inventory_failed");
+        detectedGarmentCount = partial.garmentCount ?? detectedGarmentCount;
+        for (const garment of partial.garments || []) persistedByCandidate.set(garment.candidateKey, garment);
+        await loadWardrobe(cloudSession);
+        setImportMessage(completed === total
+          ? `${detectedGarmentCount} prendas encontradas. Preparando sus imágenes…`
+          : `${detectedGarmentCount} prendas disponibles mientras revisamos las fotos restantes…`);
       });
       setExperimentalProgress(82);
-      const response = await cloudFetch(cloudSession, `/api/v1/batches/${batchId}/experimental-inventory`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          provider: "chatgpt-codex-experimental",
-          model: EXPERIMENTAL_CODEX_MODEL,
-          consent: true,
-          results: analysis.results,
-          usage: analysis.usage,
-        }),
-      });
-      const result = await response.json() as {
-        error?: string;
-        detail?: string;
-        garmentCount?: number;
-        garments?: Array<{ id: string; candidateKey: string }>;
-      };
-      if (!response.ok) throw new Error(result.detail ? `${result.error || "experimental_inventory_failed"}: ${result.detail}` : result.error || "experimental_inventory_failed");
       const candidates = new Map(analysis.results.flatMap((item) => item.garments).map((item) => [item.candidate_key, item]));
       const photosById = new Map(selectedPhotos.map((photo) => [photo.id, photo]));
-      const eligible = (result.garments || []).filter((item) => {
+      const persistedGarments = Array.from(new Map(
+        Array.from(persistedByCandidate.values()).map((garment) => [garment.id, garment]),
+      ).values());
+      const eligible = persistedGarments.filter((item) => {
         const candidate = candidates.get(item.candidateKey);
         return candidate && candidate.visibility === "clear" && candidate.confidence >= 85 && !candidate.is_basic && candidate.evidence.length > 0;
       });
-      const basicCount = (result.garments || []).filter((item) => candidates.get(item.candidateKey)?.is_basic).length;
+      const basicCount = persistedGarments.filter((item) => candidates.get(item.candidateKey)?.is_basic).length;
       let generatedCount = 0;
       for (let index = 0; index < eligible.length; index += 1) {
         const persisted = eligible[index];
@@ -1487,6 +1691,8 @@ export default function App() {
           const image = await generateExperimentalGarmentImage(photo, candidate);
           await uploadExperimentalGarmentImage(cloudSession, persisted.id, image);
           generatedCount += 1;
+          await loadWardrobe(cloudSession);
+          setImportMessage(`${generatedCount} de ${eligible.length} prendas preparadas. Ya puedes revisar las disponibles.`);
         } catch {
           // The evidence image remains available when one catalog generation fails.
         }
@@ -1494,16 +1700,15 @@ export default function App() {
       }
       setExperimentalProgress(100);
       await loadWardrobe(cloudSession);
-      Alert.alert(
-        "Inventario experimental listo",
-        `Outfit Club detectó ${result.garmentCount ?? 0} prendas, creó ${generatedCount} imagen(es) de catálogo y evitó ${basicCount} generación(es) de básicos. Revísalas antes de aprobarlas.`,
-      );
+      setImportStage("complete");
+      setImportMessage(`${detectedGarmentCount} prendas añadidas. ${basicCount ? `${basicCount} básicas se conservaron sin generar otra imagen.` : "Tu armario está listo."}`);
+      return true;
     } catch (error) {
       const detail = error instanceof Error ? error.message : "unknown";
-      Alert.alert(
-        "La prueba no terminó",
-        `Tus originales siguen en tu nube privada y el lote se puede reintentar sin subirlos otra vez. Detalle técnico: ${detail}`,
-      );
+      console.info("[Outfit Club inventory analysis]", detail);
+      setImportStage("error");
+      setImportMessage("El análisis se pausó. Tus fotos siguen seguras y puedes reanudarlo sin volver a elegirlas.");
+      return false;
     } finally {
       setExperimentalProgress(0);
       setProcessing(false);
@@ -1511,8 +1716,10 @@ export default function App() {
   };
 
   const startProcessing = async (batchId: string, mode: "economy" | "quality") => {
-    if (!cloudSession || processing) return;
+    if (!cloudSession || processing) return false;
     setProcessing(true);
+    setImportStage("analyzing");
+    setImportMessage("Detectando únicamente prendas visibles con claridad…");
     try {
       const response = await cloudFetch(cloudSession, `/api/v1/batches/${batchId}/process`, {
         method: "POST",
@@ -1521,15 +1728,20 @@ export default function App() {
       });
       const result = await response.json() as { error?: string; garmentCount?: number; duplicateCount?: number; deduplicationStatus?: string };
       if (response.status === 503 && result.error === "processing_not_configured") {
-        Alert.alert("Fotos seguras; análisis pendiente", "El motor privado de IA todavía necesita su clave de procesamiento. Tus fotos quedaron guardadas y no se enviaron a OpenAI.");
-        return;
+        setImportStage("error");
+        setImportMessage("El análisis está temporalmente en pausa. Tus fotos quedaron guardadas y podrás reintentarlo.");
+        return false;
       }
       if (!response.ok) throw new Error(result.error || "processing_failed");
       await loadWardrobe(cloudSession);
-      const dedupCopy = result.deduplicationStatus === "failed" ? "La revisión de duplicados queda pendiente." : `${result.duplicateCount ?? 0} duplicados de alta confianza quedaron apartados.`;
-      Alert.alert("Inventario listo para revisar", `Outfit Club detectó ${result.garmentCount ?? 0} candidatos de prendas. ${dedupCopy}`);
-    } catch {
-      Alert.alert("El análisis no terminó", "Tus originales siguen seguros en la nube. Podremos reintentar el inventario sin volver a subirlos.");
+      setImportStage("complete");
+      setImportMessage(`${result.garmentCount ?? 0} prendas añadidas a tu armario.`);
+      return true;
+    } catch (error) {
+      console.info("[Outfit Club inventory processing]", error instanceof Error ? error.message : "unknown");
+      setImportStage("error");
+      setImportMessage("El análisis se pausó. Tus fotos siguen seguras y puedes continuar sin volver a subirlas.");
+      return false;
     } finally {
       setProcessing(false);
     }
@@ -1958,14 +2170,34 @@ export default function App() {
                     <Text style={styles.importButtonText}>＋ Importar</Text>
                   </Pressable>
                 </View>
-                {batchReady && photos.length > 0 && (
-                  <Pressable style={styles.batchBanner} onPress={() => setImportOpen(true)}>
-                    <View style={styles.greenDot} />
+                {importStage !== "idle" && (
+                  <Pressable
+                    style={[styles.batchBanner, importStage === "error" && styles.batchBannerError]}
+                    onPress={() => {
+                      if (importStage === "error" && pendingImport) setImportOpen(true);
+                      else if (importStage === "complete") setImportStage("idle");
+                    }}
+                    disabled={!((importStage === "error" && pendingImport) || importStage === "complete")}
+                  >
+                    <View style={importStage === "error" ? styles.rustDot : styles.greenDot} />
                     <View style={styles.batchBannerText}>
-                      <Text style={styles.batchTitle}>Lote local preparado</Text>
-                      <Text style={styles.batchMeta}>{photos.length} fotos · {formatBytes(photoBytes)} · sin subir</Text>
+                      <Text style={styles.batchTitle}>{importStage === "staging"
+                        ? "Preparando fotos"
+                        : importStage === "waiting"
+                          ? "Importación en espera"
+                          : importStage === "uploading"
+                            ? `Subiendo ${uploadProgress}%`
+                            : importStage === "analyzing"
+                              ? experimentalProgress ? `Analizando ${experimentalProgress}%` : "Analizando tus fotos"
+                              : importStage === "complete" ? "Armario actualizado" : "Importación pausada"}</Text>
+                      <Text style={styles.batchMeta}>{importMessage}</Text>
+                      {(importStage === "uploading" || importStage === "analyzing") && (
+                        <View style={styles.importProgressTrack}>
+                          <View style={[styles.importProgressFill, { width: `${importStage === "uploading" ? uploadProgress : Math.max(experimentalProgress, 8)}%` }]} />
+                        </View>
+                      )}
                     </View>
-                    <Text style={styles.reviewText}>Revisar</Text>
+                    {(importStage === "error" || importStage === "complete") && <Text style={styles.reviewText}>{importStage === "error" ? "Reintentar" : "Ocultar"}</Text>}
                   </Pressable>
                 )}
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters}>
@@ -2209,7 +2441,7 @@ export default function App() {
             <View style={styles.scanOrb}><Text style={styles.scanOrbText}>✦</Text></View>
             <Text style={[styles.eyebrow, styles.centerText]}>CARRETE DEL TELÉFONO</Text>
             <Text style={styles.modalTitle}>Elige las fotos para tu armario.</Text>
-            <Text style={styles.modalIntro}>La selección permanece local hasta que tú decidas subirla. La nube nunca toma fotos por su cuenta.</Text>
+            <Text style={styles.modalIntro}>Al elegirlas, Outfit Club las guardará en tu cuenta privada y comenzará el análisis automáticamente. Puedes cerrar la app: la importación continuará o se reanudará después.</Text>
             <View style={styles.privacyPill}><View style={cloudSession ? styles.greenDot : styles.rustDot} /><Text style={styles.privacyPillText}>{cloudSession ? "CUENTA PRIVADA PROTEGIDA" : "PREPARANDO CUENTA PRIVADA"}</Text></View>
 
             <Pressable style={styles.webImportChoice} onPress={() => { setImportOpen(false); setLinkImportOpen(true); }}>
@@ -2222,8 +2454,8 @@ export default function App() {
             </Pressable>
             <Text style={styles.importDivider}>O DESDE TUS FOTOS</Text>
 
-            <Pressable style={styles.photoPicker} onPress={pickPhotos} disabled={picking}>
-              {picking ? <ActivityIndicator color="#A34F31" /> : <Text style={styles.photoPickerTitle}>{photos.length ? "Cambiar selección" : "Abrir carrete"}</Text>}
+            <Pressable style={styles.photoPicker} onPress={pickPhotos} disabled={picking || uploading || processing || importStage === "staging"}>
+              {picking || importStage === "staging" ? <ActivityIndicator color="#A34F31" /> : <Text style={styles.photoPickerTitle}>{photos.length ? "Elegir otras fotos" : "Abrir carrete y comenzar"}</Text>}
               <Text style={styles.photoPickerHint}>Fotos reales · máximo 40</Text>
             </Pressable>
 
@@ -2238,16 +2470,35 @@ export default function App() {
                   ))}
                 </View>
                 <View style={styles.photoSummary}>
-                  <Text style={styles.photoSummaryTitle}>{photos.length} fotos preparadas</Text>
-                  <Text style={styles.photoSummaryMeta}>{formatBytes(photoBytes)} en este teléfono</Text>
+                  <Text style={styles.photoSummaryTitle}>{photos.length} fotos protegidas para importar</Text>
+                  <Text style={styles.photoSummaryMeta}>{formatBytes(photoBytes)} · progreso guardado en este iPhone</Text>
                 </View>
-                {!batchReady && <Pressable style={styles.fullButton} onPress={prepareBatch}><Text style={styles.fullButtonText}>Dejar lote preparado</Text></Pressable>}
-                {batchReady && (
-                  <Pressable style={[styles.fullButton, uploading && styles.disabledButton]} onPress={uploadBatch} disabled={uploading}>
-                    <Text style={styles.fullButtonText}>{uploading ? `Subiendo a tu nube… ${uploadProgress}%` : cloudSession ? "Subir a mi nube privada" : "Terminando configuración…"}</Text>
+                {importStage === "error" && pendingImport && (
+                  <Pressable
+                    style={styles.fullButton}
+                    onPress={() => {
+                      setImportOpen(false);
+                      importResumeStarted.current = true;
+                      uploadBatch(pendingImport).catch(() => undefined);
+                    }}
+                  >
+                    <Text style={styles.fullButtonText}>Continuar importación</Text>
                   </Pressable>
                 )}
-                <Pressable onPress={() => { setPhotos([]); setBatchReady(false); }}><Text style={styles.deleteText}>Eliminar selección local</Text></Pressable>
+                {(uploading || processing) && <Text style={styles.avatarPrivacyCopy}>{importMessage}</Text>}
+                <Pressable
+                  disabled={uploading || processing}
+                  onPress={async () => {
+                    await clearImportQueue(pendingImport);
+                    setPendingImport(null);
+                    setPhotos([]);
+                    setImportStage("idle");
+                    setImportMessage("");
+                    setImportOpen(false);
+                  }}
+                >
+                  <Text style={[styles.deleteText, (uploading || processing) && styles.disabledText]}>Cancelar importación</Text>
+                </Pressable>
               </>
             )}
           </ScrollView>
@@ -2524,9 +2775,12 @@ const styles = StyleSheet.create({
   importButton: { backgroundColor: ink, paddingHorizontal: 13, paddingVertical: 11 },
   importButtonText: { color: paper, fontSize: 9, fontWeight: "700" },
   batchBanner: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 15, padding: 11, borderWidth: 1, borderColor: "#B7C0B2", backgroundColor: "#EDF0E8" },
+  batchBannerError: { borderColor: "#D5B8AA", backgroundColor: "#F5E9E2" },
   batchBannerText: { flex: 1, gap: 2 },
   batchTitle: { color: ink, fontSize: 10, fontWeight: "700" },
   batchMeta: { color: muted, fontSize: 8 },
+  importProgressTrack: { height: 3, marginTop: 5, overflow: "hidden", borderRadius: 2, backgroundColor: "rgba(113,130,106,.2)" },
+  importProgressFill: { height: 3, borderRadius: 2, backgroundColor: "#71826A" },
   reviewText: { color: ink, fontSize: 8, fontWeight: "700", textDecorationLine: "underline" },
   filters: { gap: 7, paddingBottom: 18 },
   filter: { borderWidth: 1, borderColor: line, paddingHorizontal: 13, paddingVertical: 8, borderRadius: 20 },
@@ -2560,6 +2814,7 @@ const styles = StyleSheet.create({
   cardMeta: { color: muted, fontSize: 8, marginTop: 3 },
   selectedDot: { position: "absolute", right: 7, top: 7, width: 20, height: 20, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: ink },
   selectedDotText: { color: paper, fontSize: 9 },
+  disabledText: { opacity: 0.4 },
   bottomNav: { position: "absolute", left: 0, right: 0, bottom: 0, height: 78, paddingBottom: Platform.OS === "ios" ? 8 : 0, flexDirection: "row", justifyContent: "space-around", alignItems: "center", borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: line, backgroundColor: "#F8F5ED" },
   navItem: { width: 82, alignItems: "center", gap: 3 },
   navIcon: { color: muted, fontSize: 18 },

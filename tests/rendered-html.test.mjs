@@ -42,14 +42,17 @@ test("web panel and native client expose the real privacy workflow", async () =>
 
   assert.match(mobileSource, /launchImageLibraryAsync/);
   assert.match(mobileSource, /SecureStore\.setItemAsync/);
-  assert.match(mobileSource, /Subir a mi nube privada/i);
+  assert.match(mobileSource, /Abrir carrete y comenzar/i);
+  assert.match(mobileSource, /FileSystemSessionType\.BACKGROUND/);
+  assert.match(mobileSource, /IMPORT_QUEUE_MANIFEST/);
   assert.match(mobileSource, /OAI-Sites-Authorization/);
   assert.match(mobileSource, /acknowledgesOpenAIRetention: true/);
   assert.match(mobileSource, /api\/v1\/wardrobe/);
 
-  const [processorSource, uploadSource, dedupSource, reconstructionSource, chromaSource] = await Promise.all([
+  const [processorSource, uploadSource, experimentalInventorySource, dedupSource, reconstructionSource, chromaSource] = await Promise.all([
     readFile(new URL("lib/inventory.ts", root), "utf8"),
     readFile(new URL("app/api/v1/batches/[batchId]/photos/[photoId]/route.ts", root), "utf8"),
+    readFile(new URL("app/api/v1/batches/[batchId]/experimental-inventory/route.ts", root), "utf8"),
     readFile(new URL("lib/deduplication.ts", root), "utf8"),
     readFile(new URL("lib/reconstruction.ts", root), "utf8"),
     readFile(new URL("lib/chroma.ts", root), "utf8"),
@@ -58,6 +61,8 @@ test("web panel and native client expose the real privacy workflow", async () =>
   assert.match(processorSource, /gpt-5\.6-luna/);
   assert.match(processorSource, /gpt-5\.6/);
   assert.match(uploadSource, /status: "waiting_review"/);
+  assert.match(experimentalInventorySource, /incremental/);
+  assert.match(experimentalInventorySource, /partial: true/);
   assert.match(dedupSource, /confidence < 95/);
   assert.match(reconstructionSource, /gpt-image-2/);
   assert.match(reconstructionSource, /store: false/);

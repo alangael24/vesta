@@ -208,6 +208,15 @@ async function persistCandidates(ownerId: string, batchId: string, results: Inve
       const evidence = candidate.evidence.filter((item) => photosById.has(item.photo_id));
       if (!evidence.length) continue;
       const fingerprint = fingerprintFor(candidate);
+      const [existing] = await db.select({ id: garments.id }).from(garments).where(and(
+        eq(garments.ownerId, ownerId),
+        eq(garments.batchId, batchId),
+        eq(garments.fingerprint, fingerprint),
+      )).limit(1);
+      if (existing) {
+        persistedGarments.push({ id: existing.id, candidateKey: candidate.candidate_key });
+        continue;
+      }
       const garmentId = `garment_${crypto.randomUUID()}`;
       const now = new Date().toISOString();
       const requestedPreviewKey = garmentPreviewKey(ownerId, garmentId);

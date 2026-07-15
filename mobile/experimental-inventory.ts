@@ -145,7 +145,12 @@ Bounding boxes use integer coordinates from 0 to 1000 relative to each full imag
 
 export async function analyzeExperimentalInventory(
   photos: ExperimentalPhoto[],
-  onProgress?: (completed: number, total: number) => void,
+  onProgress?: (
+    completed: number,
+    total: number,
+    result: ExperimentalInventoryResult,
+    chunkUsage: ExperimentalUsage,
+  ) => void | Promise<void>,
 ) {
   const startedAt = Date.now();
   const chunks = chunk(photos, 4);
@@ -161,6 +166,7 @@ export async function analyzeExperimentalInventory(
     totalTokens: 0,
   };
   for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+    const chunkStartedAt = Date.now();
     const photoChunk = chunks[chunkIndex];
     const content: Array<Record<string, unknown>> = [{
       type: "input_text",
@@ -190,14 +196,26 @@ export async function analyzeExperimentalInventory(
     const parsed = extractStream(raw);
     const outputText = parsed.outputText;
     if (!outputText) throw new Error("codex_empty_output");
-    results.push(JSON.parse(stripCodeFence(outputText)) as ExperimentalInventoryResult);
+    const result = JSON.parse(stripCodeFence(outputText)) as ExperimentalInventoryResult;
+    results.push(result);
+    const chunkUsage: ExperimentalUsage = {
+      photoCount: photoChunk.length,
+      requestCount: 1,
+      elapsedMs: Date.now() - chunkStartedAt,
+      inputTokens: parsed.usage.inputTokens,
+      cachedInputTokens: parsed.usage.cachedInputTokens,
+      outputTokens: parsed.usage.outputTokens,
+      reasoningOutputTokens: parsed.usage.reasoningOutputTokens,
+      totalTokens: parsed.usage.totalTokens,
+      rateLimit: parsed.rateLimit ?? readRateLimitHeaders(response),
+    };
     usage.inputTokens += parsed.usage.inputTokens;
     usage.cachedInputTokens += parsed.usage.cachedInputTokens;
     usage.outputTokens += parsed.usage.outputTokens;
     usage.reasoningOutputTokens += parsed.usage.reasoningOutputTokens;
     usage.totalTokens += parsed.usage.totalTokens;
     usage.rateLimit = parsed.rateLimit ?? readRateLimitHeaders(response) ?? usage.rateLimit;
-    onProgress?.(chunkIndex + 1, chunks.length);
+    await onProgress?.(chunkIndex + 1, chunks.length, result, chunkUsage);
   }
   usage.elapsedMs = Date.now() - startedAt;
   return { results, usage } satisfies ExperimentalInventoryAnalysis;
