@@ -150,7 +150,6 @@ export async function persistExperimentalInventory(
   photos: SourcePhoto[],
   rawResults: InventoryResult[],
 ) {
-  for (const photo of photos) await normalizePhoto(ownerId, batchId, photo);
   const garmentCount = await persistCandidates(
     ownerId,
     batchId,
