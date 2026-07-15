@@ -5,6 +5,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import * as SecureStore from "expo-secure-store";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import {
   ActivityIndicator,
   Alert,
@@ -17,7 +18,6 @@ import {
   PanResponder,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -348,7 +348,7 @@ function productImportErrorMessage(code: string) {
   return "No logramos extraer una imagen de producto utilizable. La tienda y tu armario no fueron modificados.";
 }
 
-export default function App() {
+function VestaApp() {
   const [view, setView] = useState<ViewName>("closet");
   const [filter, setFilter] = useState<Category>("all");
   const [importOpen, setImportOpen] = useState(false);
@@ -1687,7 +1687,7 @@ export default function App() {
     : cloudAvatar && cloudSession ? authorizedImageSource(cloudSession, cloudAvatar.mediaPath) : null;
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView edges={["top", "right", "bottom", "left"]} style={styles.safeArea}>
       <StatusBar style="dark" />
       <View
         ref={appRootRef}
@@ -1708,7 +1708,7 @@ export default function App() {
               ? <Image source={avatarDisplaySource} resizeMode="cover" style={styles.avatarThumb} />
               : <Text style={styles.avatarText}>YO</Text>}
           </Pressable>
-        </View>
+      </View>
 
         {view === "closet" && (
           <FlatList
@@ -1966,7 +1966,7 @@ export default function App() {
             <Image source={authorizedImageSource(cloudSession, wardrobeDrag.item.imagePath)} resizeMode="contain" style={styles.wardrobeDragGhostImage} />
           </View>
         )}
-      </View>
+        </View>
 
       <Modal visible={importOpen} transparent animationType="slide" onRequestClose={() => setImportOpen(false)}>
         <View style={styles.modalBackdrop}>
@@ -2243,6 +2243,14 @@ export default function App() {
         </View>
       </Modal>
     </SafeAreaView>
+  );
+}
+
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <VestaApp />
+    </SafeAreaProvider>
   );
 }
 
