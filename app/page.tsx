@@ -124,8 +124,6 @@ export default function Home() {
   const [favorites, setFavorites] = useState<number[]>(loadFavorites);
   const [showImport, setShowImport] = useState(false);
   const [showCloud, setShowCloud] = useState(false);
-  const [pairingLoading, setPairingLoading] = useState(false);
-  const [pairingUrl, setPairingUrl] = useState("");
   const [selectedPhotos, setSelectedPhotos] = useState<LocalPhoto[]>([]);
   const [batchPrepared, setBatchPrepared] = useState(false);
   const [toast, setToast] = useState("");
@@ -216,31 +214,6 @@ export default function Home() {
   const showSampleLooks = () => {
     openView("outfits");
     setToast("Estos looks son una muestra del producto");
-  };
-
-  const startPairing = async () => {
-    setPairingLoading(true);
-    try {
-      const response = await fetch("/api/v1/pairing", { method: "POST" });
-      if (!response.ok) throw new Error("pairing_failed");
-      const result = await response.json() as { pairingUrl: string };
-      setPairingUrl(result.pairingUrl);
-      setToast("Enlace seguro creado · dura 10 minutos");
-    } catch {
-      setToast("No se pudo crear el enlace · vuelve a iniciar sesión");
-    } finally {
-      setPairingLoading(false);
-    }
-  };
-
-  const copyPairingLink = async () => {
-    if (!pairingUrl) return;
-    try {
-      await navigator.clipboard.writeText(pairingUrl);
-      setToast("Enlace copiado · pégalo dentro de Vesta");
-    } catch {
-      setToast("No se pudo copiar automáticamente");
-    }
   };
 
   return (
@@ -488,24 +461,15 @@ export default function Home() {
             <button className="sheet-close" onClick={() => setShowCloud(false)} aria-label="Cerrar">×</button>
             <span className="app-icon-preview">V</span>
             <p className="eyebrow">Backend y panel privado</p>
-            <h2 id="cloud-title">Conecta la app nativa.</h2>
-            <p>Esta web administra tu nube. D1 guarda el inventario y los trabajos; R2 guarda todas las imágenes sin hacerlas públicas.</p>
+            <h2 id="cloud-title">Tu cuenta incluye una nube privada.</h2>
+            <p>Vesta la configura automáticamente al iniciar sesión. D1 guarda el inventario y los trabajos; R2 guarda todas las imágenes sin hacerlas públicas.</p>
             <div className="cloud-facts">
               <div><span>Originales</span><strong>R2 privado</strong></div>
               <div><span>PNG y renders</span><strong>R2 privado</strong></div>
               <div><span>Prendas y estados</span><strong>D1 privado</strong></div>
               <div><span>Acceso</span><strong>Solo Alan</strong></div>
             </div>
-            <button className="primary-button" disabled={pairingLoading} onClick={startPairing}>
-              {pairingLoading ? "Creando enlace seguro…" : "Emparejar app nativa"}
-            </button>
-            {pairingUrl && (
-              <div className="pairing-actions">
-                <a className="pairing-link" href={pairingUrl}>Abrir app instalada →</a>
-                <button className="text-button center" onClick={copyPairingLink}>Copiar para Expo Go</button>
-              </div>
-            )}
-            <p className="pairing-note">Hazlo desde este teléfono después de instalar la app. El enlace caduca en 10 minutos y solo puede usarse una vez.</p>
+            <p className="pairing-note">No necesitas emparejar nada ni copiar enlaces. Cada cuenta queda aislada automáticamente.</p>
           </section>
         </div>
       )}

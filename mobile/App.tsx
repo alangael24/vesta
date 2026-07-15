@@ -3,7 +3,7 @@ import * as Clipboard from "expo-clipboard";
 import * as Device from "expo-device";
 import * as ImagePicker from "expo-image-picker";
 import * as SecureStore from "expo-secure-store";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -95,6 +95,7 @@ const cloudKeys = {
   deviceToken: "vesta.device-token",
   deviceId: "vesta.device-id",
 };
+const CLOUD_CONNECT_URL = "https://vesta-armario-alan.alangael2411.chatgpt.site/api/v1/pairing";
 
 const wardrobeSprite = require("./assets/wardrobe-sprite.png") as ImageSourcePropType;
 const outfitSprite = require("./assets/outfit-sprite.png") as ImageSourcePropType;
@@ -189,6 +190,7 @@ export default function App() {
   const [wardrobeLoading, setWardrobeLoading] = useState(false);
   const [builderItems, setBuilderItems] = useState<ItemId[]>([2, 9]);
   const [occasion, setOccasion] = useState("Diario");
+  const automaticCloudConnectionStarted = useRef(false);
 
   const activeWardrobe = cloudWardrobe;
 
@@ -215,7 +217,6 @@ export default function App() {
     if (!apiUrl || !dispatchToken || !code) return;
 
     setPairing(true);
-    setProfileOpen(true);
     try {
       const response = await fetch(`${apiUrl}/api/v1/pairing/redeem`, {
         method: "POST",
@@ -239,9 +240,9 @@ export default function App() {
         SecureStore.setItemAsync(cloudKeys.deviceId, session.deviceId),
       ]);
       setCloudSession(session);
-      Alert.alert("Nube conectada", "Este teléfono ya puede guardar fotos en tu nube privada de Vesta.");
     } catch {
-      Alert.alert("No se pudo emparejar", "El enlace pudo expirar. Genera uno nuevo desde la web privada.");
+      automaticCloudConnectionStarted.current = false;
+      Alert.alert("No se pudo preparar tu cuenta", "Vesta volverá a intentarlo cuando abras la app o subas fotos.");
     } finally {
       setPairing(false);
     }
@@ -257,6 +258,13 @@ export default function App() {
     ]).then(([apiUrl, dispatchToken, deviceToken, deviceId]) => {
       if (active && apiUrl && dispatchToken && deviceToken && deviceId) {
         setCloudSession({ apiUrl, dispatchToken, deviceToken, deviceId });
+      } else if (active && !automaticCloudConnectionStarted.current) {
+        automaticCloudConnectionStarted.current = true;
+        setPairing(true);
+        Linking.openURL(CLOUD_CONNECT_URL).catch(() => {
+          automaticCloudConnectionStarted.current = false;
+          setPairing(false);
+        });
       }
     }).catch(() => undefined);
 
@@ -333,11 +341,6 @@ export default function App() {
     Alert.alert("Lote local preparado", "Tus fotos siguen únicamente en este teléfono hasta que pulses “Subir a mi nube privada”.");
   };
 
-  const disconnectCloud = async () => {
-    await Promise.all(Object.values(cloudKeys).map((key) => SecureStore.deleteItemAsync(key)));
-    setCloudSession(null);
-  };
-
   const connectCodexExperiment = async () => {
     if (codexConnecting) return;
     setCodexConnecting(true);
@@ -371,19 +374,18 @@ export default function App() {
     Alert.alert("ChatGPT desconectado", "Los tokens experimentales se eliminaron del Keychain.");
   };
 
-  const pairFromClipboard = async () => {
-    const value = (await Clipboard.getStringAsync()).trim();
-    if (!value.startsWith("vesta://pair?")) {
-      Alert.alert("No hay un enlace de Vesta", "Copia el enlace desde la web privada y vuelve a intentarlo.");
-      return;
-    }
-    await redeemPairingUrl(value);
-  };
-
   const uploadBatch = async () => {
     if (!cloudSession) {
       setImportOpen(false);
-      setProfileOpen(true);
+      if (!automaticCloudConnectionStarted.current) {
+        automaticCloudConnectionStarted.current = true;
+        setPairing(true);
+        await Linking.openURL(CLOUD_CONNECT_URL).catch(() => {
+          automaticCloudConnectionStarted.current = false;
+          setPairing(false);
+        });
+      }
+      Alert.alert("Preparando tu cuenta", "Vesta terminará la configuración privada y volverá automáticamente.");
       return;
     }
     if (photos.some((photo) => !photo.fileSize)) {
@@ -585,9 +587,9 @@ export default function App() {
             <View style={styles.brandMark}><Text style={styles.brandLetter}>V</Text></View>
             <Text style={styles.brandName}>VESTA</Text>
           </Pressable>
-          <View style={styles.cloudBadge}>
+            <View style={styles.cloudBadge}>
             <View style={cloudSession ? styles.greenDot : styles.rustDot} />
-            <Text style={[styles.cloudBadgeText, !cloudSession && styles.cloudBadgePending]}>{processing ? experimentalProgress ? `ANALIZANDO ${experimentalProgress}%` : "ANALIZANDO…" : reconstructingId ? "CREANDO PNG…" : cloudSession ? "NUBE CONECTADA" : "NUBE POR EMPAREJAR"}</Text>
+            <Text style={[styles.cloudBadgeText, !cloudSession && styles.cloudBadgePending]}>{processing ? experimentalProgress ? `ANALIZANDO ${experimentalProgress}%` : "ANALIZANDO…" : reconstructingId ? "CREANDO PNG…" : cloudSession ? "CUENTA PROTEGIDA" : "PREPARANDO CUENTA…"}</Text>
           </View>
           <Pressable style={styles.avatar} onPress={() => setProfileOpen(true)} accessibilityLabel="Privacidad y perfil">
             <Text style={styles.avatarText}>AL</Text>
@@ -744,7 +746,7 @@ export default function App() {
             <Text style={[styles.eyebrow, styles.centerText]}>CARRETE DEL TELÉFONO</Text>
             <Text style={styles.modalTitle}>Elige las fotos para tu armario.</Text>
             <Text style={styles.modalIntro}>La selección permanece local hasta que tú decidas subirla. La nube nunca toma fotos por su cuenta.</Text>
-            <View style={styles.privacyPill}><View style={cloudSession ? styles.greenDot : styles.rustDot} /><Text style={styles.privacyPillText}>{cloudSession ? "NUBE PRIVADA CONECTADA" : "LOCAL · NUBE POR EMPAREJAR"}</Text></View>
+            <View style={styles.privacyPill}><View style={cloudSession ? styles.greenDot : styles.rustDot} /><Text style={styles.privacyPillText}>{cloudSession ? "CUENTA PRIVADA PROTEGIDA" : "PREPARANDO CUENTA PRIVADA"}</Text></View>
 
             <Pressable style={styles.photoPicker} onPress={pickPhotos} disabled={picking}>
               {picking ? <ActivityIndicator color="#A34F31" /> : <Text style={styles.photoPickerTitle}>{photos.length ? "Cambiar selección" : "Abrir carrete"}</Text>}
@@ -768,7 +770,7 @@ export default function App() {
                 {!batchReady && <Pressable style={styles.fullButton} onPress={prepareBatch}><Text style={styles.fullButtonText}>Dejar lote preparado</Text></Pressable>}
                 {batchReady && (
                   <Pressable style={[styles.fullButton, uploading && styles.disabledButton]} onPress={uploadBatch} disabled={uploading}>
-                    <Text style={styles.fullButtonText}>{uploading ? `Subiendo a tu nube… ${uploadProgress}%` : cloudSession ? "Subir a mi nube privada" : "Emparejar nube para subir"}</Text>
+                    <Text style={styles.fullButtonText}>{uploading ? `Subiendo a tu nube… ${uploadProgress}%` : cloudSession ? "Subir a mi nube privada" : "Terminando configuración…"}</Text>
                   </Pressable>
                 )}
                 <Pressable onPress={() => { setPhotos([]); setBatchReady(false); }}><Text style={styles.deleteText}>Eliminar selección local</Text></Pressable>
@@ -791,13 +793,11 @@ export default function App() {
               <View style={styles.architectureRow}><Text style={styles.architectureLabel}>PNG Y RENDERS</Text><Text style={styles.architectureValue}>Privados</Text></View>
               <View style={styles.architectureRow}><Text style={styles.architectureLabel}>DUPLICADOS APARTADOS</Text><Text style={styles.architectureValue}>{duplicateCount}</Text></View>
               <View style={styles.architectureRow}><Text style={styles.architectureLabel}>ACCESO</Text><Text style={styles.architectureValue}>Solo Alan</Text></View>
-              <View style={styles.architectureRow}><Text style={styles.architectureLabel}>ESTADO</Text><Text style={cloudSession ? styles.architectureValue : styles.architecturePending}>{cloudSession ? "Conectada" : pairing ? "Emparejando…" : "Por conectar"}</Text></View>
+              <View style={styles.architectureRow}><Text style={styles.architectureLabel}>ESTADO</Text><Text style={cloudSession ? styles.architectureValue : styles.architecturePending}>{cloudSession ? "Protegida y sincronizada" : pairing ? "Preparando cuenta…" : "Configurando…"}</Text></View>
               <View style={styles.architectureRow}><Text style={styles.architectureLabel}>CHATGPT · PRUEBA</Text><Text style={codexConnected ? styles.architectureValue : styles.architecturePending}>{codexConnected ? "Conectado" : codexConnecting ? "Esperando autorización…" : "Desconectado"}</Text></View>
             </View>
-            <Text style={styles.profileFootnote}>{cloudSession ? `${cloudWardrobe.length ? `${cloudWardrobe.length} prendas reales sincronizadas. ` : ""}Las credenciales de este dispositivo están guardadas en el llavero seguro del sistema.` : "Abre la web privada de Vesta en este teléfono y toca “Emparejar app nativa”. El enlace dura diez minutos."}</Text>
+            <Text style={styles.profileFootnote}>{cloudSession ? `${cloudWardrobe.length ? `${cloudWardrobe.length} prendas reales sincronizadas. ` : ""}La nube privada pertenece a esta cuenta y la credencial del dispositivo está protegida por el llavero del sistema.` : "Vesta está creando automáticamente el espacio privado de esta cuenta."}</Text>
             {cloudSession && <Pressable style={styles.secondaryButton} onPress={() => loadWardrobe()} disabled={wardrobeLoading}><Text style={styles.secondaryButtonText}>{wardrobeLoading ? "Sincronizando…" : "Sincronizar armario"}</Text></Pressable>}
-            {!cloudSession && <Pressable style={styles.fullButton} onPress={pairFromClipboard} disabled={pairing}><Text style={styles.fullButtonText}>{pairing ? "Emparejando…" : "Pegar enlace de emparejamiento"}</Text></Pressable>}
-            {cloudSession && <Pressable onPress={disconnectCloud}><Text style={styles.deleteText}>Desconectar este teléfono</Text></Pressable>}
             <Text style={styles.experimentalNote}>MODO PERSONAL EXPERIMENTAL · Usa tu suscripción solo para analizar fotos. Los tokens permanecen en este iPhone.</Text>
             {!codexConnected && <Pressable style={[styles.fullButton, styles.experimentalButton, codexConnecting && styles.disabledButton]} onPress={connectCodexExperiment} disabled={codexConnecting}><Text style={styles.fullButtonText}>{codexConnecting ? "Esperando autorización…" : "Continuar con ChatGPT · prueba"}</Text></Pressable>}
             {codexConnected && <Pressable style={[styles.secondaryButton, styles.experimentalButton]} onPress={disconnectCodexExperiment}><Text style={styles.secondaryButtonText}>Cerrar sesión experimental</Text></Pressable>}

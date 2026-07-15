@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { getChatGPTUser } from "@/app/chatgpt-auth";
+import { chatGPTSignInPath, getChatGPTUser } from "@/app/chatgpt-auth";
 import { getDb } from "@/db";
 import { pairingCodes, users } from "@/db/schema";
 import { hashSecret, ownerIdForEmail, randomToken } from "@/lib/crypto";
@@ -9,6 +9,32 @@ export const dynamic = "force-dynamic";
 export async function POST() {
   const user = await getChatGPTUser();
   if (!user) return Response.json({ error: "sign_in_required" }, { status: 401 });
+
+  const pairing = await createPairing(user);
+  if (pairing instanceof Response) return pairing;
+  return Response.json(pairing, { headers: { "Cache-Control": "no-store" } });
+}
+
+export async function GET(request: Request) {
+  const user = await getChatGPTUser();
+  if (!user) {
+    const current = new URL(request.url);
+    const returnTo = `${current.pathname}${current.search}`;
+    return Response.redirect(new URL(chatGPTSignInPath(returnTo), current.origin), 302);
+  }
+
+  const pairing = await createPairing(user);
+  if (pairing instanceof Response) return pairing;
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: pairing.pairingUrl,
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
+async function createPairing(user: { email: string; displayName: string }) {
 
   const dispatchToken = process.env.VESTA_DISPATCH_BYPASS_TOKEN;
   if (!dispatchToken) {
@@ -46,8 +72,8 @@ export async function POST() {
     code,
   });
 
-  return Response.json({
+  return {
     pairingUrl: `vesta://pair?${params.toString()}`,
     expiresAt,
-  }, { headers: { "Cache-Control": "no-store" } });
+  };
 }
