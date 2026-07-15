@@ -4,6 +4,7 @@ const ISSUER = "https://auth.openai.com";
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 export const CODEX_DEVICE_URL = `${ISSUER}/codex/device`;
 export const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
+const CODEX_IMAGE_EDITS_URL = "https://chatgpt.com/backend-api/codex/images/edits";
 
 const tokenKeys = {
   access: "vesta.experimental-codex.access",
@@ -107,6 +108,16 @@ export async function codexFetch(body: Record<string, unknown>): Promise<Respons
   return response;
 }
 
+export async function codexImageEdit(body: Record<string, unknown>): Promise<Response> {
+  let session = await validSession(false);
+  let response = await sendCodexImageRequest(session, body);
+  if (response.status === 401) {
+    session = await validSession(true);
+    response = await sendCodexImageRequest(session, body);
+  }
+  return response;
+}
+
 async function validSession(forceRefresh: boolean): Promise<CodexSession> {
   const session = await getCodexSession();
   if (!session) throw new Error("codex_not_connected");
@@ -174,6 +185,15 @@ function sendCodexRequest(session: CodexSession, body: Record<string, unknown>) 
   });
   if (session.accountId) headers.set("ChatGPT-Account-Id", session.accountId);
   return fetch(CODEX_RESPONSES_URL, { method: "POST", headers, body: JSON.stringify(body) });
+}
+
+function sendCodexImageRequest(session: CodexSession, body: Record<string, unknown>) {
+  const headers = new Headers({
+    Authorization: `Bearer ${session.accessToken}`,
+    "Content-Type": "application/json",
+  });
+  if (session.accountId) headers.set("ChatGPT-Account-Id", session.accountId);
+  return fetch(CODEX_IMAGE_EDITS_URL, { method: "POST", headers, body: JSON.stringify(body) });
 }
 
 function extractAccountId(token?: string) {

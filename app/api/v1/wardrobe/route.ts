@@ -54,6 +54,7 @@ export async function GET(request: Request) {
       qaStatus: row.qaStatus,
       qaSummary: qaSummary(row.qaJson),
       imagePath: row.cutoutKey || row.previewKey ? `/api/v1/media/garments/${row.id}` : row.photoId ? `/api/v1/media/photos/${row.photoId}` : null,
+      evidencePath: row.photoId ? `/api/v1/media/photos/${row.photoId}` : null,
       imageKind: row.cutoutKey && row.status !== "held" ? "cutout" : "evidence",
     })),
     duplicateCount: duplicates?.count ?? 0,

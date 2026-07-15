@@ -33,6 +33,7 @@ import {
   analyzeExperimentalInventory,
   EXPERIMENTAL_CODEX_MODEL,
   ExperimentalPhoto,
+  generateExperimentalGarmentImage,
 } from "./experimental-inventory";
 
 type ViewName = "closet" | "builder" | "looks";
@@ -54,6 +55,7 @@ type WardrobeItem = {
   qaStatus?: "pending" | "pass" | "review" | "fail" | null;
   qaSummary?: { summary?: string | null; issues?: string[] };
   imagePath?: string | null;
+  evidencePath?: string | null;
   imageKind?: "cutout" | "evidence";
   spriteIndex?: number;
 };
@@ -87,6 +89,7 @@ type CloudGarment = {
   qaStatus?: "pending" | "pass" | "review" | "fail" | null;
   qaSummary?: { summary?: string | null; issues?: string[] };
   imagePath?: string | null;
+  evidencePath?: string | null;
   imageKind?: "cutout" | "evidence";
 };
 
@@ -565,13 +568,39 @@ export default function App() {
           usage: analysis.usage,
         }),
       });
-      const result = await response.json() as { error?: string; detail?: string; garmentCount?: number };
+      const result = await response.json() as {
+        error?: string;
+        detail?: string;
+        garmentCount?: number;
+        garments?: Array<{ id: string; candidateKey: string }>;
+      };
       if (!response.ok) throw new Error(result.detail ? `${result.error || "experimental_inventory_failed"}: ${result.detail}` : result.error || "experimental_inventory_failed");
+      const candidates = new Map(analysis.results.flatMap((item) => item.garments).map((item) => [item.candidate_key, item]));
+      const photosById = new Map(selectedPhotos.map((photo) => [photo.id, photo]));
+      const eligible = (result.garments || []).filter((item) => {
+        const candidate = candidates.get(item.candidateKey);
+        return candidate && candidate.visibility !== "held" && candidate.evidence.length > 0;
+      });
+      let generatedCount = 0;
+      for (let index = 0; index < eligible.length; index += 1) {
+        const persisted = eligible[index];
+        const candidate = candidates.get(persisted.candidateKey)!;
+        const photo = photosById.get(candidate.evidence[0].photo_id);
+        if (!photo) continue;
+        try {
+          const image = await generateExperimentalGarmentImage(photo, candidate);
+          await uploadExperimentalGarmentImage(cloudSession, persisted.id, image);
+          generatedCount += 1;
+        } catch {
+          // The evidence image remains available when one catalog generation fails.
+        }
+        setExperimentalProgress(85 + Math.round(((index + 1) / Math.max(eligible.length, 1)) * 15));
+      }
       setExperimentalProgress(100);
       await loadWardrobe(cloudSession);
       Alert.alert(
         "Inventario experimental listo",
-        `Vesta detectó ${result.garmentCount ?? 0} prendas con tu suscripción de ChatGPT. Revísalas: esta modalidad todavía no deduplica ni crea PNG transparentes.`,
+        `Vesta detectó ${result.garmentCount ?? 0} prendas y creó ${generatedCount} imagen(es) de catálogo con tu suscripción de ChatGPT. Revísalas antes de aprobarlas.`,
       );
     } catch (error) {
       const detail = error instanceof Error ? error.message : "unknown";
@@ -611,6 +640,17 @@ export default function App() {
   };
 
   const chooseReconstruction = (item: WardrobeItem) => {
+    if (codexConnected && item.evidencePath) {
+      Alert.alert(
+        "Crear imagen de catálogo",
+        "GPT Image 2 aislará esta prenda a partir de tu foto y la colocará sobre fondo blanco. La foto original seguirá guardada como evidencia privada.",
+        [
+          { text: "Ahora no", style: "cancel" },
+          { text: "Crear", onPress: () => startExperimentalReconstruction(item) },
+        ],
+      );
+      return;
+    }
     const heldNote = item.status === "held" ? " La evidencia es débil; si continúas, el resultado quedará obligado a revisión." : "";
     Alert.alert(
       "Crear PNG transparente",
@@ -621,6 +661,52 @@ export default function App() {
         { text: "Calidad final", onPress: () => startReconstruction(item, "final") },
       ],
     );
+  };
+
+  const startExperimentalReconstruction = async (item: WardrobeItem) => {
+    if (!cloudSession || !item.evidencePath || reconstructingId) return;
+    setReconstructingId(item.id);
+    try {
+      if (!FileSystem.cacheDirectory) throw new Error("image_cache_unavailable");
+      const localPath = `${FileSystem.cacheDirectory}vesta-evidence-${item.id}.jpg`;
+      const download = await FileSystem.downloadAsync(`${cloudSession.apiUrl}${item.evidencePath}`, localPath, {
+        headers: {
+          "OAI-Sites-Authorization": `Bearer ${cloudSession.dispatchToken}`,
+          "x-vesta-device-token": cloudSession.deviceToken,
+        },
+        sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
+      });
+      if (download.status < 200 || download.status >= 300) throw new Error(`evidence_download_${download.status}`);
+      try {
+        const image = await generateExperimentalGarmentImage(
+          { id: `evidence-${item.id}`, asset: { uri: download.uri, width: 1600, height: 1600, type: "image" } },
+          {
+            candidate_key: String(item.id),
+            name: item.name,
+            category: item.category,
+            type: item.type,
+            color: item.color,
+            material: item.material || "",
+            description: item.description || "",
+            confidence: item.confidence || 70,
+            visibility: "clear",
+            evidence: [{ photo_id: `evidence-${item.id}`, bbox: { x: 0, y: 0, width: 1000, height: 1000 } }],
+          },
+        );
+        await uploadExperimentalGarmentImage(cloudSession, String(item.id), image);
+      } finally {
+        await FileSystem.deleteAsync(localPath, { idempotent: true }).catch(() => undefined);
+      }
+      const items = await loadWardrobe(cloudSession);
+      const updated = items?.find((candidate) => candidate.id === item.id);
+      if (updated) setSelectedItem(updated);
+      Alert.alert("Imagen lista", "Vesta creó la prenda aislada sobre fondo blanco. Compárala con la evidencia antes de aprobarla.");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "unknown";
+      Alert.alert("No se creó la imagen", `La evidencia original sigue intacta. Detalle técnico: ${detail}`);
+    } finally {
+      setReconstructingId(null);
+    }
   };
 
   const startReconstruction = async (item: WardrobeItem, mode: "draft" | "final") => {
@@ -1105,6 +1191,33 @@ function authorizedImageSource(session: CloudSession, path: string) {
       "x-vesta-device-token": session.deviceToken,
     },
   };
+}
+
+async function uploadExperimentalGarmentImage(session: CloudSession, garmentId: string, base64: string) {
+  if (!FileSystem.cacheDirectory) throw new Error("image_cache_unavailable");
+  const localPath = `${FileSystem.cacheDirectory}vesta-generated-${garmentId}.png`;
+  await FileSystem.writeAsStringAsync(localPath, base64, { encoding: FileSystem.EncodingType.Base64 });
+  try {
+    const response = await FileSystem.uploadAsync(
+      `${session.apiUrl}/api/v1/garments/${garmentId}/experimental-image`,
+      localPath,
+      {
+        httpMethod: "PUT",
+        uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+        sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
+        headers: {
+          "Content-Type": "image/png",
+          "OAI-Sites-Authorization": `Bearer ${session.dispatchToken}`,
+          "x-vesta-device-token": session.deviceToken,
+        },
+      },
+    );
+    if (response.status < 200 || response.status >= 300) {
+      throw uploadResultError("generated_image", response.status, response.body);
+    }
+  } finally {
+    await FileSystem.deleteAsync(localPath, { idempotent: true }).catch(() => undefined);
+  }
 }
 
 function categoryForUi(category: string): Exclude<Category, "all"> {

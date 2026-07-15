@@ -105,7 +105,8 @@ export async function POST(request: Request, context: RouteContext) {
       throw new InventoryError("invalid_photo_evidence", "Inventory evidence references an unknown photo.");
     }
 
-    const garmentCount = await persistExperimentalInventory(identity.ownerId, batchId, photos, payload.results);
+    const persisted = await persistExperimentalInventory(identity.ownerId, batchId, photos, payload.results);
+    const garmentCount = persisted.garmentCount;
     const completedAt = new Date().toISOString();
     await db.batch([
       db.update(processingJobs).set({
@@ -120,7 +121,7 @@ export async function POST(request: Request, context: RouteContext) {
       }).where(eq(processingJobs.id, job.id)),
       db.update(importBatches).set({ status: "review", updatedAt: completedAt }).where(eq(importBatches.id, batchId)),
     ]);
-    return Response.json({ ok: true, status: "review", garmentCount, duplicateCount: 0, deduplicationStatus: "not_run" });
+    return Response.json({ ok: true, status: "review", garmentCount, garments: persisted.garments, duplicateCount: 0, deduplicationStatus: "not_run" });
   } catch (error) {
     const failedAt = new Date().toISOString();
     const code = error instanceof InventoryError ? error.code : "experimental_inventory_failed";

@@ -1,6 +1,6 @@
 import * as ImageManipulator from "expo-image-manipulator";
 import type * as ImagePicker from "expo-image-picker";
-import { codexFetch } from "./codex-auth";
+import { codexFetch, codexImageEdit } from "./codex-auth";
 
 export const EXPERIMENTAL_CODEX_MODEL = "gpt-5.6-luna";
 
@@ -52,6 +52,8 @@ export type ExperimentalInventoryAnalysis = {
   results: ExperimentalInventoryResult[];
   usage: ExperimentalUsage;
 };
+
+export type ExperimentalGarmentCandidate = ExperimentalInventoryResult["garments"][number];
 
 const inventorySchema = {
   type: "object",
@@ -165,6 +167,27 @@ export async function analyzeExperimentalInventory(
   }
   usage.elapsedMs = Date.now() - startedAt;
   return { results, usage } satisfies ExperimentalInventoryAnalysis;
+}
+
+export async function generateExperimentalGarmentImage(
+  photo: ExperimentalPhoto,
+  garment: ExperimentalGarmentCandidate,
+) {
+  const image = await prepareImage(photo.asset);
+  const prompt = `Create a clean ecommerce catalog image of only the target garment visibly supported by the reference: ${garment.name}; type: ${garment.type}; color: ${garment.color || "unknown"}. Remove the person, body, face, hands, phone, room, background, text, interface, and every other object. Reconstruct only this physical garment faithfully, front view, centered, white background, no mannequin, no body, no hanger, no logo, no invented graphics, patterns, seams, pockets, or branding. Preserve only details visibly supported by the reference.`;
+  const response = await codexImageEdit({
+    images: [{ image_url: `data:image/jpeg;base64,${image}` }],
+    prompt,
+    background: "opaque",
+    model: "gpt-image-2",
+    quality: "auto",
+    size: "auto",
+  });
+  const payload = await response.json() as { data?: Array<{ b64_json?: string }>; error?: { message?: string } };
+  if (!response.ok) throw new Error(payload.error?.message || `image_edit_${response.status}`);
+  const result = payload.data?.[0]?.b64_json;
+  if (!result) throw new Error("image_edit_empty");
+  return result;
 }
 
 async function prepareImage(photo: ImagePicker.ImagePickerAsset) {

@@ -33,6 +33,11 @@ export type InventoryRun = {
   rawResults: InventoryResult[];
 };
 
+export type PersistedInventoryCandidate = {
+  id: string;
+  candidateKey: string;
+};
+
 const inventorySchema = {
   type: "object",
   additionalProperties: false,
@@ -136,12 +141,12 @@ export async function runInventory(ownerId: string, batchId: string, photos: Sou
     outputTokens += payload.usage?.output_tokens ?? 0;
   }
 
-  const garmentCount = await persistCandidates(ownerId, batchId, rawResults, new Map(photos.map((photo) => [photo.id, photo])));
+  const persisted = await persistCandidates(ownerId, batchId, rawResults, new Map(photos.map((photo) => [photo.id, photo])));
   await getDb().update(sourcePhotos).set({ status: "analyzed" }).where(and(
     eq(sourcePhotos.ownerId, ownerId),
     eq(sourcePhotos.batchId, batchId),
   ));
-  return { garmentCount, inputTokens, outputTokens, model, rawResults };
+  return { garmentCount: persisted.garmentCount, inputTokens, outputTokens, model, rawResults };
 }
 
 export async function persistExperimentalInventory(
@@ -150,7 +155,7 @@ export async function persistExperimentalInventory(
   photos: SourcePhoto[],
   rawResults: InventoryResult[],
 ) {
-  const garmentCount = await persistCandidates(
+  const persisted = await persistCandidates(
     ownerId,
     batchId,
     rawResults,
@@ -160,7 +165,7 @@ export async function persistExperimentalInventory(
     eq(sourcePhotos.ownerId, ownerId),
     eq(sourcePhotos.batchId, batchId),
   ));
-  return garmentCount;
+  return persisted;
 }
 
 async function normalizePhoto(ownerId: string, batchId: string, photo: SourcePhoto) {
@@ -190,6 +195,7 @@ async function normalizePhoto(ownerId: string, batchId: string, photo: SourcePho
 async function persistCandidates(ownerId: string, batchId: string, results: InventoryResult[], photosById: Map<string, SourcePhoto>) {
   const db = getDb();
   let garmentCount = 0;
+  const persistedGarments: PersistedInventoryCandidate[] = [];
   for (const result of results) {
     for (const candidate of result.garments) {
       const evidence = candidate.evidence.filter((item) => photosById.has(item.photo_id));
@@ -223,6 +229,7 @@ async function persistCandidates(ownerId: string, batchId: string, results: Inve
         updatedAt: now,
       });
       garmentCount += 1;
+      persistedGarments.push({ id: garmentId, candidateKey: candidate.candidate_key });
       await db.insert(garmentEvidence).values(evidence.map((item) => ({
         id: `evidence_${crypto.randomUUID()}`,
         garmentId,
@@ -236,7 +243,7 @@ async function persistCandidates(ownerId: string, batchId: string, results: Inve
       }))).onConflictDoNothing();
     }
   }
-  return garmentCount;
+  return { garmentCount, garments: persistedGarments };
 }
 
 async function createEvidencePreview(ownerId: string, batchId: string, photo: SourcePhoto, bbox: InventoryCandidate["evidence"][number]["bbox"], previewKey: string) {
