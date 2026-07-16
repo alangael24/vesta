@@ -54,6 +54,10 @@ test("navigation keeps creation central and collections inside Profile", () => {
   assert.match(mobileApp, />Mi guardarropa<\/Text>/u);
   assert.match(mobileApp, />Outfits<\/Text>/u);
   assert.match(mobileApp, />Lista de deseos<\/Text>/u);
+  assert.match(mobileApp, /label: "Prendas"/u);
+  assert.match(mobileApp, /label: "Outfits"/u);
+  assert.match(mobileApp, /label: "Deseos"/u);
+  assert.match(mobileApp, /borderRadius: 39.*shadowOpacity: \.14/u);
   assert.doesNotMatch(mobileApp, /styles\.navLabel[^\n]*>Armario<\/Text>/u);
   assert.doesNotMatch(mobileApp, /styles\.navLabel[^\n]*>Looks<\/Text>/u);
   assert.doesNotMatch(mobileApp, /styles\.navLabel[^\n]*>Calendario<\/Text>/u);

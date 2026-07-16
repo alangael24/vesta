@@ -811,6 +811,24 @@ function CalendarMonthGrid({
   );
 }
 
+function ProfileCollectionTabs({ view, onSelect }: { view: ViewName; onSelect: (next: ViewName) => void }) {
+  const tabs: Array<{ id: ViewName; label: string }> = [
+    { id: "closet", label: "Prendas" },
+    { id: "looks", label: "Outfits" },
+    { id: "wishlist", label: "Deseos" },
+  ];
+  return (
+    <View style={styles.collectionTabs}>
+      {tabs.map((tab) => (
+        <Pressable key={tab.id} style={styles.collectionTab} onPress={() => onSelect(tab.id)}>
+          <Text style={[styles.collectionTabText, view === tab.id && styles.collectionTabTextActive]}>{tab.label}</Text>
+          {view === tab.id && <View style={styles.collectionTabIndicator} />}
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
 function productImportErrorMessage(code: string) {
   if (/invalid_url|unsafe_url/u.test(code)) return "El enlace no es una página pública válida. Revisa que empiece con https://.";
   if (/product_page_blocked/u.test(code)) return "Esa tienda bloqueó la lectura automática. Prueba con el enlace directo de la imagen del producto.";
@@ -2547,7 +2565,7 @@ export default function App() {
             <View style={cloudSession ? styles.greenDot : styles.rustDot} />
             <Text style={[styles.cloudBadgeText, !cloudSession && styles.cloudBadgePending]}>{tryOnRendering ? "CREANDO LOOK…" : avatarGenerating ? "CREANDO AVATAR…" : processing ? "ANALIZANDO…" : reconstructingId ? "PREPARANDO PRENDA…" : cloudSession ? "CUENTA PROTEGIDA" : "PREPARANDO CUENTA…"}</Text>
           </View>
-          <Pressable style={styles.avatar} onPress={() => setView("profile")} accessibilityLabel="Ir a Perfil">
+          <Pressable style={styles.avatar} onPress={() => setProfileOpen(true)} accessibilityLabel="Cuenta y ajustes">
             {avatarDisplaySource
               ? <Image source={avatarDisplaySource} resizeMode="cover" style={styles.avatarThumb} />
               : <Text style={styles.avatarText}>YO</Text>}
@@ -2648,6 +2666,7 @@ export default function App() {
 
         {view === "wishlist" && (
           <ScrollView contentContainerStyle={styles.screenContent} showsVerticalScrollIndicator={false}>
+            <ProfileCollectionTabs view={view} onSelect={setView} />
             <View style={styles.headingRow}>
               <View><Text style={styles.eyebrow}>PARA PROBAR DESPUÉS</Text><Text style={styles.pageTitle}>Lista de deseos</Text></View>
             </View>
@@ -2664,20 +2683,12 @@ export default function App() {
           <FlatList
             data={visibleItems}
             keyExtractor={(item) => String(item.id)}
-            numColumns={2}
+            numColumns={3}
             columnWrapperStyle={styles.cardRow}
             contentContainerStyle={styles.screenContent}
             ListHeaderComponent={
               <View>
-                <View style={styles.headingRow}>
-                  <View>
-                    <Text style={styles.eyebrow}>TU ARMARIO PRIVADO</Text>
-                    <Text style={styles.pageTitle}>Armario <Text style={styles.count}>{activeWardrobe.length}</Text></Text>
-                  </View>
-                  <Pressable style={styles.importButton} onPress={() => requirePremium("wardrobe") && setImportOpen(true)}>
-                    <Text style={styles.importButtonText}>＋ Importar</Text>
-                  </Pressable>
-                </View>
+                <ProfileCollectionTabs view={view} onSelect={setView} />
                 {importStage !== "idle" && (
                   <Pressable
                     style={[styles.batchBanner, importStage === "error" && styles.batchBannerError]}
@@ -2726,10 +2737,6 @@ export default function App() {
             renderItem={({ item }) => (
               <Pressable style={styles.garmentCard} onPress={() => setSelectedItem(item)}>
                 <GarmentVisual item={item} session={cloudSession} />
-                <View style={styles.cardCopy}>
-                  <Text style={styles.cardTitle}>{item.name}</Text>
-                  <Text style={styles.cardMeta}>{item.type} · {item.color} · {statusLabel(item.status)}</Text>
-                </View>
                 {tryOnLayers.some((layer) => layer.item.id === item.id) && <View style={styles.selectedDot}><Text style={styles.selectedDotText}>✓</Text></View>}
               </Pressable>
             )}
@@ -2887,6 +2894,7 @@ export default function App() {
             removeClippedSubviews
             ListHeaderComponent={
               <View>
+                <ProfileCollectionTabs view={view} onSelect={setView} />
                 <View style={styles.headingRow}>
                   <View>
                     <Text style={styles.eyebrow}>TUS COMBINACIONES</Text>
@@ -2986,7 +2994,7 @@ export default function App() {
           <Pressable style={styles.navCreate} onPress={() => setCreateMenuOpen(true)} accessibilityLabel="Agregar o crear">
             <Text style={styles.navCreateIcon}>＋</Text>
           </Pressable>
-          <Pressable style={styles.navItem} onPress={() => setView("profile")}>
+          <Pressable style={styles.navItem} onPress={() => setView("closet")}>
             <Text style={[styles.navIcon, ["profile", "closet", "looks", "wishlist"].includes(view) && styles.navActive]}>○</Text><Text style={[styles.navLabel, ["profile", "closet", "looks", "wishlist"].includes(view) && styles.navActive]}>Perfil</Text>
           </Pressable>
         </View>
@@ -3549,6 +3557,11 @@ const styles = StyleSheet.create({
   avatarText: { color: ink, fontSize: 9, fontWeight: "700" },
   avatarThumb: { width: 28, height: 28, borderRadius: 14 },
   screenContent: { paddingHorizontal: 16, paddingTop: 26, paddingBottom: 110 },
+  collectionTabs: { height: 52, flexDirection: "row", alignItems: "stretch", marginHorizontal: -16, marginTop: -18, marginBottom: 18, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line },
+  collectionTab: { flex: 1, position: "relative", alignItems: "center", justifyContent: "center" },
+  collectionTabText: { color: "#99938A", fontSize: 12, fontWeight: "700" },
+  collectionTabTextActive: { color: ink, fontWeight: "900" },
+  collectionTabIndicator: { position: "absolute", left: 13, right: 13, bottom: -1, height: 2, borderRadius: 1, backgroundColor: ink },
   homeHero: { overflow: "hidden", padding: 22, borderRadius: 24, backgroundColor: ink, marginBottom: 28 },
   homeTitle: { maxWidth: 310, color: paper, fontSize: 37, lineHeight: 40, letterSpacing: -1.4, fontFamily: Platform.select({ ios: "Georgia", android: "serif" }) },
   homeIntro: { maxWidth: 290, color: "#C9C2B7", fontSize: 10, lineHeight: 16, marginTop: 10 },
@@ -3617,8 +3630,8 @@ const styles = StyleSheet.create({
   emptyCollection: { alignItems: "center", marginTop: 34, paddingHorizontal: 26, paddingVertical: 34, borderWidth: 1, borderStyle: "dashed", borderColor: line, backgroundColor: "#F8F5ED" },
   emptyCollectionTitle: { color: ink, fontSize: 17, fontFamily: Platform.select({ ios: "Georgia", android: "serif" }) },
   emptyCollectionCopy: { color: muted, maxWidth: 250, marginTop: 8, textAlign: "center", fontSize: 9, lineHeight: 14 },
-  cardRow: { gap: 9 },
-  garmentCard: { flex: 1, position: "relative", marginBottom: 13, backgroundColor: paper, borderWidth: StyleSheet.hairlineWidth, borderColor: "transparent" },
+  cardRow: { gap: 5 },
+  garmentCard: { flex: 1, position: "relative", maxWidth: "33.333%", marginBottom: 9, backgroundColor: paper, borderWidth: StyleSheet.hairlineWidth, borderColor: "transparent" },
   looksIntro: { color: muted, fontSize: 9, lineHeight: 14, marginTop: -7, marginBottom: 18, maxWidth: 310 },
   outfitCollage: { position: "relative", width: "100%", aspectRatio: 0.72, overflow: "hidden", backgroundColor: "#E9E2D5" },
   outfitVisualLayer: { position: "absolute", left: 0, right: 0, top: 0, bottom: 0 },
@@ -3642,13 +3655,13 @@ const styles = StyleSheet.create({
   selectedDot: { position: "absolute", right: 7, top: 7, width: 20, height: 20, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: ink },
   selectedDotText: { color: paper, fontSize: 9 },
   disabledText: { opacity: 0.4 },
-  bottomNav: { position: "absolute", left: 0, right: 0, bottom: 0, height: 78, paddingBottom: Platform.OS === "ios" ? 8 : 0, flexDirection: "row", justifyContent: "space-evenly", alignItems: "center", borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: line, backgroundColor: "#F8F5ED" },
-  navItem: { width: 68, alignItems: "center", gap: 3 },
-  navIcon: { color: muted, fontSize: 18 },
-  navLabel: { color: muted, fontSize: 8 },
+  bottomNav: { position: "absolute", left: 32, right: 32, bottom: Platform.OS === "ios" ? 16 : 12, height: 76, flexDirection: "row", justifyContent: "space-evenly", alignItems: "center", borderWidth: StyleSheet.hairlineWidth, borderColor: "rgba(216,209,196,.52)", borderRadius: 39, backgroundColor: "#FBFAF7", shadowColor: "#000", shadowOpacity: .14, shadowRadius: 24, shadowOffset: { width: 0, height: 10 }, elevation: 12 },
+  navItem: { flex: 1, height: 68, alignItems: "center", justifyContent: "center", gap: 3 },
+  navIcon: { color: "#9B978F", fontSize: 20 },
+  navLabel: { color: "#9B978F", fontSize: 9 },
   navActive: { color: ink, fontWeight: "700" },
-  navCreate: { width: 57, height: 57, marginTop: -24, borderRadius: 29, alignItems: "center", justifyContent: "center", backgroundColor: ink, borderWidth: 4, borderColor: paper },
-  navCreateIcon: { color: paper, fontSize: 24, lineHeight: 27, fontWeight: "300" },
+  navCreate: { width: 58, height: 58, borderRadius: 29, alignItems: "center", justifyContent: "center", backgroundColor: "#000", shadowColor: "#000", shadowOpacity: .18, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 8 },
+  navCreateIcon: { color: "#FFF", fontSize: 28, lineHeight: 30, fontWeight: "300" },
   navCreateLabel: { color: paper, fontSize: 7, marginTop: 2 },
   builderScreen: { padding: 22, paddingBottom: 115 },
   builderTitle: { color: ink, maxWidth: 330, fontSize: 42, lineHeight: 44, letterSpacing: -1.7, fontFamily: Platform.select({ ios: "Georgia", android: "serif" }) },
