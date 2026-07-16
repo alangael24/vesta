@@ -4,7 +4,7 @@ import * as Device from "expo-device";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import * as SecureStore from "expo-secure-store";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -475,10 +475,12 @@ function OutfitVisual({
   outfit,
   session,
   showPieces = false,
+  localPieceImages,
 }: {
   outfit: Outfit;
   session: CloudSession | null;
   showPieces?: boolean;
+  localPieceImages?: Map<string, string>;
 }) {
   const visiblePieces = outfit.pieces.slice(0, 6);
   const collageColumns = visiblePieces.length > 4 ? 3 : 2;
@@ -502,18 +504,9 @@ function OutfitVisual({
 
   return (
     <View style={styles.outfitCollage}>
-      <Animated.View
+      {(showPieces || !renderSource) && <Animated.View
         pointerEvents="none"
-        style={[
-          styles.outfitVisualLayer,
-          renderSource ? {
-            opacity: revealProgress.interpolate({ inputRange: [0, 0.22, 1], outputRange: [0, 0.48, 1] }),
-            transform: [
-              { translateX: revealProgress.interpolate({ inputRange: [0, 1], outputRange: [-34, 0] }) },
-              { scale: revealProgress.interpolate({ inputRange: [0, 1], outputRange: [0.97, 1] }) },
-            ],
-          } : { opacity: 1 },
-        ]}
+        style={[styles.outfitVisualLayer, renderSource ? { opacity: revealProgress } : { opacity: 1 }]}
       >
         {visiblePieces.map((piece, index) => (
           <Animated.View
@@ -543,15 +536,17 @@ function OutfitVisual({
               } : null,
             ]}
           >
-            {piece.imagePath && session
-              ? <Image source={authorizedImageSource(session, piece.imagePath)} resizeMode="contain" style={styles.outfitCollageImage} />
+            {localPieceImages?.get(String(piece.id))
+              ? <Image source={{ uri: localPieceImages.get(String(piece.id))! }} resizeMode="contain" style={styles.outfitCollageImage} />
+              : piece.imagePath && session
+                ? <Image source={authorizedImageSource(session, piece.imagePath)} resizeMode="contain" style={styles.outfitCollageImage} />
               : <Text style={styles.outfitCollageFallback}>✦</Text>}
           </Animated.View>
         ))}
         <View style={styles.outfitPendingBadge}>
           <Text style={styles.outfitPendingBadgeText}>{renderSource ? "PRENDAS DEL LOOK" : "FOTO PENDIENTE"}</Text>
         </View>
-      </Animated.View>
+      </Animated.View>}
       {renderSource && (
         <Animated.View
           pointerEvents="none"
@@ -574,13 +569,14 @@ function OutfitVisual({
   );
 }
 
-function LookCard({
+const LookCard = memo(function LookCard({
   outfit,
   session,
   onOpen,
   onPeek,
   onPeekEnd,
   showPieces,
+  localPieceImages,
 }: {
   outfit: Outfit;
   session: CloudSession | null;
@@ -588,6 +584,7 @@ function LookCard({
   onPeek: () => void;
   onPeekEnd: () => void;
   showPieces: boolean;
+  localPieceImages: Map<string, string>;
 }) {
   const longPressActive = useRef(false);
   return (
@@ -609,7 +606,7 @@ function LookCard({
       accessibilityLabel={outfit.name}
       accessibilityHint="Toca para abrir o mantén presionado para ver las prendas del outfit"
     >
-      <OutfitVisual outfit={outfit} session={session} showPieces={showPieces} />
+      <OutfitVisual outfit={outfit} session={session} showPieces={showPieces} localPieceImages={localPieceImages} />
       <View style={styles.lookCopy}>
         <Text style={styles.cardTitle}>{outfit.name}</Text>
         <Text style={styles.cardMeta}>{outfit.occasion} · {outfit.pieces.length} prendas · {outfit.renderPath ? "foto lista" : "foto pendiente"}</Text>
@@ -617,7 +614,10 @@ function LookCard({
       </View>
     </Pressable>
   );
-}
+}, (previous, next) => previous.outfit === next.outfit
+  && previous.session === next.session
+  && previous.showPieces === next.showPieces
+  && previous.localPieceImages === next.localPieceImages);
 
 function fittingSlotFor(item: WardrobeItem): FittingSlot {
   const descriptor = `${item.type} ${item.name} ${item.description || ""}`.toLowerCase();
@@ -804,6 +804,11 @@ export default function App() {
     () => activeWardrobe.filter((item) => filter === "all" || item.category === filter),
     [activeWardrobe, filter],
   );
+  const localWardrobeImages = useMemo(() => new Map(
+    cloudWardrobe
+      .filter((item): item is WardrobeItem & { localImageUri: string } => Boolean(item.localImageUri))
+      .map((item) => [String(item.id), item.localImageUri]),
+  ), [cloudWardrobe]);
   const photoBytes = useMemo(
     () => photos.reduce((total, photo) => total + (photo.fileSize ?? 0), 0),
     [photos],
@@ -2743,6 +2748,11 @@ export default function App() {
             numColumns={2}
             columnWrapperStyle={styles.cardRow}
             contentContainerStyle={styles.screenContent}
+            initialNumToRender={6}
+            maxToRenderPerBatch={6}
+            updateCellsBatchingPeriod={16}
+            windowSize={5}
+            removeClippedSubviews
             ListHeaderComponent={
               <View>
                 <View style={styles.headingRow}>
@@ -2773,6 +2783,7 @@ export default function App() {
                 onPeek={() => setPeekedOutfit(item)}
                 onPeekEnd={() => setPeekedOutfit(null)}
                 showPieces={peekedOutfit?.id === item.id}
+                localPieceImages={localWardrobeImages}
               />
             )}
           />
