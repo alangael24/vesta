@@ -719,6 +719,10 @@ export default function App() {
   const [productPlacement, setProductPlacement] = useState<ProductPlacementHint>("auto");
   const [productImporting, setProductImporting] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [reviewLoginOpen, setReviewLoginOpen] = useState(false);
+  const [reviewEmail, setReviewEmail] = useState("");
+  const [reviewPassword, setReviewPassword] = useState("");
+  const [reviewSigningIn, setReviewSigningIn] = useState(false);
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const [paywallOpen, setPaywallOpen] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
@@ -841,6 +845,39 @@ export default function App() {
       showNotice("Reconectando tu cuenta", "Volveremos a intentarlo automáticamente.", "error");
     } finally {
       setPairing(false);
+    }
+  }
+
+  async function signInForAppReview() {
+    if (!reviewEmail.trim() || !reviewPassword) return;
+    setReviewSigningIn(true);
+    try {
+      const response = await fetch(`${CLOUD_CONNECT_URL.replace(/\/api\/v1\/pairing$/u, "")}/api/v1/review-login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: reviewEmail,
+          password: reviewPassword,
+          name: Device.deviceName || "Apple App Review",
+        }),
+      });
+      if (!response.ok) throw new Error("review_login_failed");
+      const session = await response.json() as CloudSession;
+      await Promise.all([
+        SecureStore.setItemAsync(cloudKeys.apiUrl, session.apiUrl),
+        SecureStore.setItemAsync(cloudKeys.dispatchToken, session.dispatchToken),
+        SecureStore.setItemAsync(cloudKeys.deviceToken, session.deviceToken),
+        SecureStore.setItemAsync(cloudKeys.deviceId, session.deviceId),
+      ]);
+      setCloudSession(session);
+      setReviewPassword("");
+      setReviewLoginOpen(false);
+      setProfileOpen(false);
+      showNotice("Cuenta de revisión lista", "Ya puedes probar todas las funciones Premium.");
+    } catch {
+      showNotice("No pudimos iniciar sesión", "Revisa el correo y la contraseña de Apple Review.", "error");
+    } finally {
+      setReviewSigningIn(false);
     }
   }
 
@@ -2907,6 +2944,11 @@ export default function App() {
               <Pressable style={styles.secondaryButton} onPress={() => { setProfileOpen(false); setPrivacyOpen(true); }}>
                 <Text style={styles.secondaryButtonText}>Política de privacidad</Text>
               </Pressable>
+              {!cloudSession && (
+                <Pressable style={styles.secondaryButton} onPress={() => { setProfileOpen(false); setReviewLoginOpen(true); }}>
+                  <Text style={styles.secondaryButtonText}>Acceso para Apple Review</Text>
+                </Pressable>
+              )}
               {cloudSession && (
                 <Pressable style={[styles.fullButton, styles.avatarProfileButton]} onPress={() => { setProfileOpen(false); setAvatarOpen(true); }}>
                   <Text style={styles.fullButtonText}>{avatarDisplaySource ? "Administrar mi avatar" : "Crear mi avatar"}</Text>
@@ -2917,6 +2959,22 @@ export default function App() {
               {!codexConnected && <Pressable style={[styles.fullButton, styles.experimentalButton, codexConnecting && styles.disabledButton]} onPress={connectCodexExperiment} disabled={codexConnecting}><Text style={styles.fullButtonText}>{codexConnecting ? "Esperando autorización…" : "Continuar con ChatGPT · prueba"}</Text></Pressable>}
               {codexConnected && <Pressable style={[styles.secondaryButton, styles.experimentalButton]} onPress={disconnectCodexExperiment}><Text style={styles.secondaryButtonText}>Cerrar sesión experimental</Text></Pressable>}
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={reviewLoginOpen} transparent animationType="slide" onRequestClose={() => !reviewSigningIn && setReviewLoginOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalSheet}>
+            <Pressable style={styles.closeButton} onPress={() => setReviewLoginOpen(false)} disabled={reviewSigningIn}><Text style={styles.closeText}>×</Text></Pressable>
+            <Text style={[styles.eyebrow, styles.centerText]}>APPLE APP REVIEW</Text>
+            <Text style={styles.modalTitle}>Acceso de revisión.</Text>
+            <Text style={styles.modalIntro}>Cuenta aislada para que el equipo de Apple pruebe las funciones Premium sin utilizar una cuenta personal.</Text>
+            <TextInput style={styles.productUrlInput} value={reviewEmail} onChangeText={setReviewEmail} placeholder="Correo de revisión" placeholderTextColor="#9B9386" autoCapitalize="none" autoCorrect={false} keyboardType="email-address" editable={!reviewSigningIn} />
+            <TextInput style={styles.productUrlInput} value={reviewPassword} onChangeText={setReviewPassword} placeholder="Contraseña" placeholderTextColor="#9B9386" autoCapitalize="none" autoCorrect={false} secureTextEntry editable={!reviewSigningIn} onSubmitEditing={() => signInForAppReview().catch(() => undefined)} />
+            <Pressable style={[styles.fullButton, (!reviewEmail.trim() || !reviewPassword || reviewSigningIn) && styles.disabledButton]} onPress={() => signInForAppReview().catch(() => undefined)} disabled={!reviewEmail.trim() || !reviewPassword || reviewSigningIn}>
+              {reviewSigningIn ? <ActivityIndicator color={paper} /> : <Text style={styles.fullButtonText}>Entrar a la cuenta de prueba</Text>}
+            </Pressable>
           </View>
         </View>
       </Modal>
