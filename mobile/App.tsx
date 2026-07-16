@@ -881,6 +881,17 @@ export default function App() {
     }
   }
 
+  function startCloudConnection() {
+    if (pairing) return;
+    automaticCloudConnectionStarted.current = true;
+    setPairing(true);
+    Linking.openURL(CLOUD_CONNECT_URL).catch(() => {
+      automaticCloudConnectionStarted.current = false;
+      setPairing(false);
+      showNotice("No pudimos abrir el acceso", "Inténtalo nuevamente desde tu perfil.", "error");
+    });
+  }
+
   useEffect(() => {
     let active = true;
     Promise.all([
@@ -892,12 +903,7 @@ export default function App() {
       if (active && apiUrl && dispatchToken && deviceToken && deviceId) {
         setCloudSession({ apiUrl, dispatchToken, deviceToken, deviceId });
       } else if (active && !automaticCloudConnectionStarted.current) {
-        automaticCloudConnectionStarted.current = true;
-        setPairing(true);
-        Linking.openURL(CLOUD_CONNECT_URL).catch(() => {
-          automaticCloudConnectionStarted.current = false;
-          setPairing(false);
-        });
+        setProfileOpen(true);
       }
     }).catch(() => undefined);
 
@@ -2944,6 +2950,11 @@ export default function App() {
               <Pressable style={styles.secondaryButton} onPress={() => { setProfileOpen(false); setPrivacyOpen(true); }}>
                 <Text style={styles.secondaryButtonText}>Política de privacidad</Text>
               </Pressable>
+              {!cloudSession && (
+                <Pressable style={[styles.fullButton, pairing && styles.disabledButton]} onPress={startCloudConnection} disabled={pairing}>
+                  <Text style={styles.fullButtonText}>{pairing ? "Esperando conexión…" : "Conectar mi cuenta"}</Text>
+                </Pressable>
+              )}
               {!cloudSession && (
                 <Pressable style={styles.secondaryButton} onPress={() => { setProfileOpen(false); setReviewLoginOpen(true); }}>
                   <Text style={styles.secondaryButtonText}>Acceso para Apple Review</Text>
