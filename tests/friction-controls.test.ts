@@ -43,3 +43,18 @@ test("the closet uses four simple filters while preserving feminine garment type
   assert.match(mobileApp, /Bolsos y accesorios/u);
   assert.match(mobileApp, /fittingSlotsConflict/u);
 });
+
+test("navigation keeps creation central and collections inside Profile", () => {
+  assert.match(mobileApp, /type ViewName = "home" \| "profile" \| "closet" \| "builder" \| "looks" \| "calendar" \| "wishlist"/u);
+  assert.match(mobileApp, />Home<\/Text>/u);
+  assert.match(mobileApp, />Perfil<\/Text>/u);
+  assert.match(mobileApp, /setCreateMenuOpen\(true\).*accessibilityLabel="Agregar o crear"/u);
+  assert.match(mobileApp, />Agregar ropa<\/Text>/u);
+  assert.match(mobileApp, />Crear atuenda<\/Text>/u);
+  assert.match(mobileApp, />Mi guardarropa<\/Text>/u);
+  assert.match(mobileApp, />Outfits<\/Text>/u);
+  assert.match(mobileApp, />Lista de deseos<\/Text>/u);
+  assert.doesNotMatch(mobileApp, /styles\.navLabel[^\n]*>Armario<\/Text>/u);
+  assert.doesNotMatch(mobileApp, /styles\.navLabel[^\n]*>Looks<\/Text>/u);
+  assert.doesNotMatch(mobileApp, /styles\.navLabel[^\n]*>Calendario<\/Text>/u);
+});

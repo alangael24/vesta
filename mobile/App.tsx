@@ -30,7 +30,7 @@ import {
 import { SubscriptionPaywall, SubscriptionStatus } from "./SubscriptionPaywall";
 import { PrivacyPolicyModal } from "./PrivacyPolicy";
 
-type ViewName = "closet" | "builder" | "looks" | "calendar";
+type ViewName = "home" | "profile" | "closet" | "builder" | "looks" | "calendar" | "wishlist";
 type Category = "all" | "tops" | "layers" | "bottoms" | "footwear" | "accessories" | "one_piece";
 type ClosetFilter = "all" | "clothing" | "footwear" | "accessories";
 type ItemId = number | string;
@@ -822,7 +822,7 @@ function productImportErrorMessage(code: string) {
 
 export default function App() {
   const [notice, setNotice] = useState<AppNotice | null>(null);
-  const [view, setView] = useState<ViewName>("closet");
+  const [view, setView] = useState<ViewName>("home");
   const [filter, setFilter] = useState<ClosetFilter>("all");
   const [importOpen, setImportOpen] = useState(false);
   const [linkImportOpen, setLinkImportOpen] = useState(false);
@@ -830,6 +830,7 @@ export default function App() {
   const [productPlacement, setProductPlacement] = useState<ProductPlacementHint>("auto");
   const [productImporting, setProductImporting] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const [reviewLoginOpen, setReviewLoginOpen] = useState(false);
   const [reviewEmail, setReviewEmail] = useState("");
   const [reviewPassword, setReviewPassword] = useState("");
@@ -2538,7 +2539,7 @@ export default function App() {
           </Pressable>
         )}
         <View style={styles.topbar}>
-          <Pressable onPress={() => setView("closet")} style={styles.brand} accessibilityLabel="Ir al armario">
+          <Pressable onPress={() => setView("home")} style={styles.brand} accessibilityLabel="Ir a Home">
             <View style={styles.brandMark}><Text style={styles.brandLetter}>OC</Text></View>
             <Text style={styles.brandName}>OUTFIT CLUB</Text>
           </Pressable>
@@ -2546,12 +2547,118 @@ export default function App() {
             <View style={cloudSession ? styles.greenDot : styles.rustDot} />
             <Text style={[styles.cloudBadgeText, !cloudSession && styles.cloudBadgePending]}>{tryOnRendering ? "CREANDO LOOK…" : avatarGenerating ? "CREANDO AVATAR…" : processing ? "ANALIZANDO…" : reconstructingId ? "PREPARANDO PRENDA…" : cloudSession ? "CUENTA PROTEGIDA" : "PREPARANDO CUENTA…"}</Text>
           </View>
-          <Pressable style={styles.avatar} onPress={() => setProfileOpen(true)} accessibilityLabel="Privacidad y perfil">
+          <Pressable style={styles.avatar} onPress={() => setView("profile")} accessibilityLabel="Ir a Perfil">
             {avatarDisplaySource
               ? <Image source={avatarDisplaySource} resizeMode="cover" style={styles.avatarThumb} />
               : <Text style={styles.avatarText}>YO</Text>}
           </Pressable>
         </View>
+
+        {view === "home" && (
+          <ScrollView contentContainerStyle={styles.screenContent} showsVerticalScrollIndicator={false}>
+            <View style={styles.homeHero}>
+              <Text style={styles.eyebrow}>TU ESTILO, EN UN SOLO LUGAR</Text>
+              <Text style={styles.homeTitle}>¿Qué te vas a poner hoy?</Text>
+              <Text style={styles.homeIntro}>Organiza tu ropa, crea atuendos y vuelve a usar tus mejores combinaciones.</Text>
+              <Pressable style={styles.homePrimaryAction} onPress={() => setCreateMenuOpen(true)}>
+                <Text style={styles.homePrimaryActionText}>＋ Crear algo nuevo</Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.homeSectionHeading}>
+              <View><Text style={styles.eyebrow}>HOY</Text><Text style={styles.homeSectionTitle}>Tu calendario</Text></View>
+              <Pressable onPress={() => { setCalendarSelectedDate(calendarDateKey(new Date())); setView("calendar"); }}><Text style={styles.homeSectionLink}>Ver calendario</Text></Pressable>
+            </View>
+            {calendarEntries.filter((entry) => entry.scheduledDate === calendarDateKey(new Date())).length ? (
+              <View style={styles.homeTodayList}>
+                {calendarEntries.filter((entry) => entry.scheduledDate === calendarDateKey(new Date())).slice(0, 2).map((entry) => {
+                  const outfit = outfitsById.get(entry.outfitId);
+                  if (!outfit) return null;
+                  return (
+                    <Pressable key={entry.id} style={styles.homeTodayCard} onPress={() => setSelectedOutfit(outfit)}>
+                      <View style={styles.homeTodayThumb}><OutfitVisual outfit={outfit} session={cloudSession} localPieceImages={localWardrobeImages} /></View>
+                      <View style={styles.homeTodayCopy}><Text style={styles.homeTodayEyebrow}>ATUENDO DE HOY</Text><Text style={styles.homeTodayName}>{outfit.name}</Text><Text style={styles.homeTodayMeta}>{outfit.pieces.length} prendas</Text></View>
+                      <Text style={styles.homeCardArrow}>›</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ) : (
+              <Pressable style={styles.homeEmptyCalendar} onPress={() => setView("calendar")}>
+                <Text style={styles.homeEmptyCalendarIcon}>□</Text>
+                <View style={styles.homeEmptyCalendarCopy}><Text style={styles.homeEmptyCalendarTitle}>Hoy está libre</Text><Text style={styles.homeEmptyCalendarMeta}>Agrega un outfit al calendario cuando quieras planearlo.</Text></View>
+                <Text style={styles.homeCardArrow}>›</Text>
+              </Pressable>
+            )}
+
+            <View style={styles.homeSectionHeading}>
+              <View><Text style={styles.eyebrow}>RECIENTES</Text><Text style={styles.homeSectionTitle}>Tus últimos outfits</Text></View>
+              <Pressable onPress={() => setView("looks")}><Text style={styles.homeSectionLink}>Ver todos</Text></Pressable>
+            </View>
+            {outfits.length ? (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.homeLooksRail}>
+                {outfits.slice(0, 5).map((outfit) => (
+                  <Pressable key={outfit.id} style={styles.homeLookCard} onPress={() => setSelectedOutfit(outfit)}>
+                    <View style={styles.homeLookVisual}><OutfitVisual outfit={outfit} session={cloudSession} localPieceImages={localWardrobeImages} /></View>
+                    <Text style={styles.homeLookName} numberOfLines={1}>{outfit.name}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            ) : (
+              <Pressable style={styles.homeEmptyLooks} onPress={() => setView("builder")}>
+                <Text style={styles.homeEmptyLooksTitle}>Crea tu primer atuendo</Text>
+                <Text style={styles.homeEmptyLooksCopy}>Combina las prendas de tu guardarropa y guárdalo en Outfits.</Text>
+              </Pressable>
+            )}
+          </ScrollView>
+        )}
+
+        {view === "profile" && (
+          <ScrollView contentContainerStyle={styles.screenContent} showsVerticalScrollIndicator={false}>
+            <View style={styles.profileHubHeader}>
+              <View style={styles.profileHubAvatar}>
+                {avatarDisplaySource ? <Image source={avatarDisplaySource} resizeMode="cover" style={styles.profileHubAvatarImage} /> : <Text style={styles.profileAvatarText}>YO</Text>}
+              </View>
+              <Text style={styles.eyebrow}>TU ESPACIO PERSONAL</Text>
+              <Text style={styles.pageTitle}>Perfil</Text>
+              <Text style={styles.profileHubIntro}>Tus prendas, outfits y cosas que quieres probar, organizadas en un solo lugar.</Text>
+            </View>
+            <View style={styles.profileLibrary}>
+              <Pressable style={styles.profileLibraryRow} onPress={() => setView("closet")}>
+                <View style={styles.profileLibraryIcon}><Text style={styles.profileLibraryIconText}>▦</Text></View>
+                <View style={styles.profileLibraryCopy}><Text style={styles.profileLibraryTitle}>Mi guardarropa</Text><Text style={styles.profileLibraryMeta}>{activeWardrobe.length} {activeWardrobe.length === 1 ? "prenda" : "prendas"}</Text></View>
+                <Text style={styles.profileLibraryArrow}>›</Text>
+              </Pressable>
+              <Pressable style={styles.profileLibraryRow} onPress={() => setView("looks")}>
+                <View style={styles.profileLibraryIcon}><Text style={styles.profileLibraryIconText}>▤</Text></View>
+                <View style={styles.profileLibraryCopy}><Text style={styles.profileLibraryTitle}>Outfits</Text><Text style={styles.profileLibraryMeta}>{outfits.length} {outfits.length === 1 ? "outfit guardado" : "outfits guardados"}</Text></View>
+                <Text style={styles.profileLibraryArrow}>›</Text>
+              </Pressable>
+              <Pressable style={styles.profileLibraryRow} onPress={() => setView("wishlist")}>
+                <View style={styles.profileLibraryIcon}><Text style={styles.profileLibraryIconText}>♡</Text></View>
+                <View style={styles.profileLibraryCopy}><Text style={styles.profileLibraryTitle}>Lista de deseos</Text><Text style={styles.profileLibraryMeta}>Prendas que quieres probar después</Text></View>
+                <Text style={styles.profileLibraryArrow}>›</Text>
+              </Pressable>
+            </View>
+            <Pressable style={styles.profileSettingsButton} onPress={() => setProfileOpen(true)}>
+              <Text style={styles.profileSettingsText}>Cuenta, avatar y privacidad</Text><Text style={styles.profileLibraryArrow}>›</Text>
+            </Pressable>
+          </ScrollView>
+        )}
+
+        {view === "wishlist" && (
+          <ScrollView contentContainerStyle={styles.screenContent} showsVerticalScrollIndicator={false}>
+            <View style={styles.headingRow}>
+              <View><Text style={styles.eyebrow}>PARA PROBAR DESPUÉS</Text><Text style={styles.pageTitle}>Lista de deseos</Text></View>
+            </View>
+            <View style={styles.wishlistEmpty}>
+              <Text style={styles.wishlistEmptyIcon}>♡</Text>
+              <Text style={styles.emptyCollectionTitle}>Tu lista está vacía.</Text>
+              <Text style={styles.emptyCollectionCopy}>Aquí podrás guardar prendas que te gusten sin mezclarlas con lo que ya tienes.</Text>
+              <Pressable style={styles.wishlistBrowseButton} onPress={() => { setCreateMenuOpen(true); }}><Text style={styles.wishlistBrowseButtonText}>Agregar desde el ＋</Text></Pressable>
+            </View>
+          </ScrollView>
+        )}
 
         {view === "closet" && (
           <FlatList
@@ -2873,17 +2980,14 @@ export default function App() {
         )}
 
         <View style={styles.bottomNav}>
-          <Pressable style={styles.navItem} onPress={() => setView("closet")}>
-            <Text style={[styles.navIcon, view === "closet" && styles.navActive]}>▦</Text><Text style={[styles.navLabel, view === "closet" && styles.navActive]}>Armario</Text>
+          <Pressable style={styles.navItem} onPress={() => setView("home")}>
+            <Text style={[styles.navIcon, view === "home" && styles.navActive]}>⌂</Text><Text style={[styles.navLabel, view === "home" && styles.navActive]}>Home</Text>
           </Pressable>
-          <Pressable style={styles.navCreate} onPress={() => setView("builder")}>
-            <Text style={styles.navCreateIcon}>✦</Text><Text style={styles.navCreateLabel}>Crear</Text>
+          <Pressable style={styles.navCreate} onPress={() => setCreateMenuOpen(true)} accessibilityLabel="Agregar o crear">
+            <Text style={styles.navCreateIcon}>＋</Text>
           </Pressable>
-          <Pressable style={styles.navItem} onPress={() => setView("looks")}>
-            <Text style={[styles.navIcon, view === "looks" && styles.navActive]}>▤</Text><Text style={[styles.navLabel, view === "looks" && styles.navActive]}>Looks</Text>
-          </Pressable>
-          <Pressable style={styles.navItem} onPress={() => setView("calendar")}>
-            <Text style={[styles.navIcon, view === "calendar" && styles.navActive]}>□</Text><Text style={[styles.navLabel, view === "calendar" && styles.navActive]}>Calendario</Text>
+          <Pressable style={styles.navItem} onPress={() => setView("profile")}>
+            <Text style={[styles.navIcon, ["profile", "closet", "looks", "wishlist"].includes(view) && styles.navActive]}>○</Text><Text style={[styles.navLabel, ["profile", "closet", "looks", "wishlist"].includes(view) && styles.navActive]}>Perfil</Text>
           </Pressable>
         </View>
 
@@ -2901,6 +3005,33 @@ export default function App() {
         )}
 
       </View>
+
+      <Modal visible={createMenuOpen} transparent animationType="fade" onRequestClose={() => setCreateMenuOpen(false)}>
+        <Pressable style={styles.createMenuBackdrop} onPress={() => setCreateMenuOpen(false)}>
+          <Pressable style={styles.createMenuSheet} onPress={() => undefined}>
+            <View style={styles.createMenuHandle} />
+            <Text style={styles.createMenuEyebrow}>¿QUÉ QUIERES HACER?</Text>
+            <Text style={styles.createMenuTitle}>Crear</Text>
+            <Pressable style={styles.createMenuAction} onPress={() => {
+              setCreateMenuOpen(false);
+              if (requirePremium("wardrobe")) {
+                setView("closet");
+                setImportOpen(true);
+              }
+            }}>
+              <View style={styles.createMenuActionIcon}><Text style={styles.createMenuActionIconText}>＋</Text></View>
+              <View style={styles.createMenuActionCopy}><Text style={styles.createMenuActionTitle}>Agregar ropa</Text><Text style={styles.createMenuActionMeta}>Desde tus fotos o una tienda en internet</Text></View>
+              <Text style={styles.createMenuActionArrow}>›</Text>
+            </Pressable>
+            <Pressable style={styles.createMenuAction} onPress={() => { setCreateMenuOpen(false); setView("builder"); }}>
+              <View style={styles.createMenuActionIcon}><Text style={styles.createMenuActionIconText}>✦</Text></View>
+              <View style={styles.createMenuActionCopy}><Text style={styles.createMenuActionTitle}>Crear atuenda</Text><Text style={styles.createMenuActionMeta}>Combina varias prendas y pruébatelas</Text></View>
+              <Text style={styles.createMenuActionArrow}>›</Text>
+            </Pressable>
+            <Pressable style={styles.createMenuCancel} onPress={() => setCreateMenuOpen(false)}><Text style={styles.createMenuCancelText}>Cancelar</Text></Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       <Modal visible={importOpen} transparent animationType="slide" onRequestClose={() => setImportOpen(false)}>
         <View style={styles.modalBackdrop}>
@@ -3418,6 +3549,52 @@ const styles = StyleSheet.create({
   avatarText: { color: ink, fontSize: 9, fontWeight: "700" },
   avatarThumb: { width: 28, height: 28, borderRadius: 14 },
   screenContent: { paddingHorizontal: 16, paddingTop: 26, paddingBottom: 110 },
+  homeHero: { overflow: "hidden", padding: 22, borderRadius: 24, backgroundColor: ink, marginBottom: 28 },
+  homeTitle: { maxWidth: 310, color: paper, fontSize: 37, lineHeight: 40, letterSpacing: -1.4, fontFamily: Platform.select({ ios: "Georgia", android: "serif" }) },
+  homeIntro: { maxWidth: 290, color: "#C9C2B7", fontSize: 10, lineHeight: 16, marginTop: 10 },
+  homePrimaryAction: { alignSelf: "flex-start", marginTop: 20, paddingHorizontal: 16, paddingVertical: 12, borderRadius: 22, backgroundColor: paper },
+  homePrimaryActionText: { color: ink, fontSize: 9, fontWeight: "800" },
+  homeSectionHeading: { flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", marginTop: 3, marginBottom: 12 },
+  homeSectionTitle: { color: ink, fontSize: 22, lineHeight: 25, fontFamily: Platform.select({ ios: "Georgia", android: "serif" }) },
+  homeSectionLink: { color: rust, fontSize: 8, fontWeight: "800", paddingVertical: 7 },
+  homeTodayList: { gap: 8, marginBottom: 27 },
+  homeTodayCard: { minHeight: 96, flexDirection: "row", alignItems: "center", overflow: "hidden", borderWidth: 1, borderColor: line, borderRadius: 17, backgroundColor: "#F8F5ED" },
+  homeTodayThumb: { width: 76, alignSelf: "stretch", backgroundColor: "#E9E2D5" },
+  homeTodayCopy: { flex: 1, paddingHorizontal: 13, paddingVertical: 12 },
+  homeTodayEyebrow: { color: rust, fontSize: 6, fontWeight: "900", letterSpacing: 0.9 },
+  homeTodayName: { color: ink, fontSize: 12, fontWeight: "800", marginTop: 5 },
+  homeTodayMeta: { color: muted, fontSize: 7, marginTop: 5 },
+  homeCardArrow: { color: muted, fontSize: 25, fontWeight: "300", paddingHorizontal: 14 },
+  homeEmptyCalendar: { minHeight: 92, flexDirection: "row", alignItems: "center", paddingLeft: 15, marginBottom: 27, borderWidth: 1, borderColor: line, borderRadius: 17, backgroundColor: "#F8F5ED" },
+  homeEmptyCalendarIcon: { width: 38, height: 38, color: rust, fontSize: 20, lineHeight: 36, textAlign: "center", borderRadius: 19, backgroundColor: "#F1E5DE" },
+  homeEmptyCalendarCopy: { flex: 1, paddingHorizontal: 12 },
+  homeEmptyCalendarTitle: { color: ink, fontSize: 11, fontWeight: "800" },
+  homeEmptyCalendarMeta: { color: muted, fontSize: 7, lineHeight: 11, marginTop: 4 },
+  homeLooksRail: { gap: 10, paddingRight: 16 },
+  homeLookCard: { width: 128 },
+  homeLookVisual: { width: 128, height: 158, overflow: "hidden", borderRadius: 15, backgroundColor: "#E9E2D5" },
+  homeLookName: { color: ink, fontSize: 9, fontWeight: "700", marginTop: 8 },
+  homeEmptyLooks: { alignItems: "center", padding: 28, borderWidth: 1, borderStyle: "dashed", borderColor: line, borderRadius: 18, backgroundColor: "#F8F5ED" },
+  homeEmptyLooksTitle: { color: ink, fontSize: 15, fontWeight: "800" },
+  homeEmptyLooksCopy: { maxWidth: 260, color: muted, fontSize: 8, lineHeight: 13, textAlign: "center", marginTop: 6 },
+  profileHubHeader: { alignItems: "center", paddingTop: 4, paddingBottom: 24 },
+  profileHubAvatar: { width: 86, height: 86, overflow: "hidden", alignItems: "center", justifyContent: "center", borderRadius: 43, borderWidth: 1, borderColor: line, backgroundColor: ink, marginBottom: 16 },
+  profileHubAvatarImage: { width: "100%", height: "100%" },
+  profileHubIntro: { maxWidth: 300, color: muted, fontSize: 9, lineHeight: 14, textAlign: "center", marginTop: 10 },
+  profileLibrary: { overflow: "hidden", borderWidth: 1, borderColor: line, borderRadius: 20, backgroundColor: "#F8F5ED" },
+  profileLibraryRow: { minHeight: 78, flexDirection: "row", alignItems: "center", paddingHorizontal: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line },
+  profileLibraryIcon: { width: 42, height: 42, alignItems: "center", justifyContent: "center", borderRadius: 21, backgroundColor: paper },
+  profileLibraryIconText: { color: ink, fontSize: 18 },
+  profileLibraryCopy: { flex: 1, paddingHorizontal: 13 },
+  profileLibraryTitle: { color: ink, fontSize: 12, fontWeight: "800" },
+  profileLibraryMeta: { color: muted, fontSize: 7, marginTop: 4 },
+  profileLibraryArrow: { color: muted, fontSize: 25, fontWeight: "300" },
+  profileSettingsButton: { minHeight: 56, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, marginTop: 13, borderWidth: 1, borderColor: line, borderRadius: 17 },
+  profileSettingsText: { color: ink, fontSize: 9, fontWeight: "700" },
+  wishlistEmpty: { alignItems: "center", marginTop: 12, paddingHorizontal: 26, paddingVertical: 48, borderWidth: 1, borderStyle: "dashed", borderColor: line, borderRadius: 20, backgroundColor: "#F8F5ED" },
+  wishlistEmptyIcon: { color: rust, fontSize: 34, marginBottom: 14 },
+  wishlistBrowseButton: { marginTop: 18, paddingHorizontal: 16, paddingVertical: 11, borderRadius: 20, backgroundColor: ink },
+  wishlistBrowseButtonText: { color: paper, fontSize: 8, fontWeight: "800" },
   headingRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 18 },
   eyebrow: { color: rust, fontSize: 8, fontWeight: "700", letterSpacing: 1.45, marginBottom: 7 },
   pageTitle: { color: ink, fontSize: 38, lineHeight: 40, letterSpacing: -1.5, fontFamily: Platform.select({ ios: "Georgia", android: "serif" }) },
@@ -3471,7 +3648,7 @@ const styles = StyleSheet.create({
   navLabel: { color: muted, fontSize: 8 },
   navActive: { color: ink, fontWeight: "700" },
   navCreate: { width: 57, height: 57, marginTop: -24, borderRadius: 29, alignItems: "center", justifyContent: "center", backgroundColor: ink, borderWidth: 4, borderColor: paper },
-  navCreateIcon: { color: paper, fontSize: 17 },
+  navCreateIcon: { color: paper, fontSize: 24, lineHeight: 27, fontWeight: "300" },
   navCreateLabel: { color: paper, fontSize: 7, marginTop: 2 },
   builderScreen: { padding: 22, paddingBottom: 115 },
   builderTitle: { color: ink, maxWidth: 330, fontSize: 42, lineHeight: 44, letterSpacing: -1.7, fontFamily: Platform.select({ ios: "Georgia", android: "serif" }) },
@@ -3625,6 +3802,20 @@ const styles = StyleSheet.create({
   outfitPieceList: { marginTop: 12, marginBottom: 14, padding: 12, gap: 5, borderWidth: 1, borderColor: line, borderRadius: 12, backgroundColor: "#F8F5ED" },
   outfitPieceName: { color: ink, fontSize: 9, lineHeight: 14 },
   modalBackdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(22,20,17,.45)" },
+  createMenuBackdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(22,20,17,.42)" },
+  createMenuSheet: { paddingHorizontal: 20, paddingTop: 11, paddingBottom: Platform.OS === "ios" ? 34 : 24, borderTopLeftRadius: 26, borderTopRightRadius: 26, backgroundColor: paper },
+  createMenuHandle: { width: 38, height: 4, alignSelf: "center", borderRadius: 2, backgroundColor: line, marginBottom: 24 },
+  createMenuEyebrow: { color: rust, fontSize: 7, fontWeight: "900", letterSpacing: 1.3 },
+  createMenuTitle: { color: ink, fontSize: 35, lineHeight: 39, fontFamily: Platform.select({ ios: "Georgia", android: "serif" }), marginTop: 4, marginBottom: 18 },
+  createMenuAction: { minHeight: 82, flexDirection: "row", alignItems: "center", paddingHorizontal: 13, marginBottom: 9, borderWidth: 1, borderColor: line, borderRadius: 18, backgroundColor: "#F8F5ED" },
+  createMenuActionIcon: { width: 46, height: 46, alignItems: "center", justifyContent: "center", borderRadius: 23, backgroundColor: ink },
+  createMenuActionIconText: { color: paper, fontSize: 20, fontWeight: "300" },
+  createMenuActionCopy: { flex: 1, paddingHorizontal: 13 },
+  createMenuActionTitle: { color: ink, fontSize: 12, fontWeight: "800" },
+  createMenuActionMeta: { color: muted, fontSize: 7, lineHeight: 11, marginTop: 4 },
+  createMenuActionArrow: { color: muted, fontSize: 25, fontWeight: "300" },
+  createMenuCancel: { alignItems: "center", paddingVertical: 13, marginTop: 2 },
+  createMenuCancelText: { color: muted, fontSize: 9, fontWeight: "700" },
   modalSheet: { maxHeight: "92%", paddingHorizontal: 20, paddingTop: 32, paddingBottom: 30, backgroundColor: paper, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
   importModalContent: { paddingBottom: 4 },
   profileSheet: { maxHeight: "92%", paddingHorizontal: 22, paddingTop: 38, paddingBottom: 28, backgroundColor: paper, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
