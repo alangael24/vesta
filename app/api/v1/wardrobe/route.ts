@@ -24,6 +24,7 @@ export async function GET(request: Request) {
     transparentPixelRatio: garments.transparentPixelRatio,
     qaStatus: garments.qaStatus,
     qaJson: garments.qaJson,
+    updatedAt: garments.updatedAt,
     cutoutKey: garments.cutoutKey,
     previewKey: garments.previewKey,
     photoId: garmentEvidence.photoId,
@@ -59,7 +60,9 @@ export async function GET(request: Request) {
       transparentPixelRatio: row.transparentPixelRatio,
       qaStatus: row.qaStatus,
       qaSummary: qaSummary(row.qaJson),
-      imagePath: row.cutoutKey || row.previewKey ? `/api/v1/media/garments/${row.id}` : row.photoId ? `/api/v1/media/photos/${row.photoId}` : null,
+      imagePath: row.cutoutKey || row.previewKey
+        ? `/api/v1/media/garments/${row.id}?v=${encodeURIComponent(row.updatedAt)}`
+        : row.photoId ? `/api/v1/media/photos/${row.photoId}` : null,
       evidencePath: row.photoId ? `/api/v1/media/photos/${row.photoId}` : null,
       imageKind: row.cutoutKey && row.status !== "held" ? "cutout" : "evidence",
     })),

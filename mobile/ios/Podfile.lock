@@ -2281,7 +2281,7 @@ SPEC CHECKSUMS:
   ExpoModulesWorklets: 7ee538b64f31c28729cd5a6a693593b300452b4f
   ExpoSecureStore: 8e3efc4a558e43fbbd80b61b0106b8521a409545
   FBLazyVector: b3e7ad108f0d882e30445c5527d774e3fd432f3d
-  hermes-engine: 853b0d4f10ad085f422faa6c3804be957c28a7cd
+  hermes-engine: 17159bba61163f670410fd00b458f62b280811bb
   libwebp: 02b23773aedb6ff1fd38cec7a77b81414c6842a8
   NitroIap: c0ca51b4a0c02091ea4492cb829fd568d2bee60d
   NitroModules: 7e004af1d2cbc3072b071de62aeb9c147ef79d34

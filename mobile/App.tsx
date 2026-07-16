@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  AppState,
   FlatList,
   Image,
   ImageSourcePropType,
@@ -67,6 +68,7 @@ type WardrobeItem = {
   qaStatus?: "pending" | "pass" | "review" | "fail" | null;
   qaSummary?: { summary?: string | null; issues?: string[] };
   imagePath?: string | null;
+  localImageUri?: string | null;
   evidencePath?: string | null;
   imageKind?: "cutout" | "evidence";
   spriteIndex?: number;
@@ -172,6 +174,17 @@ type PendingImportQueue = {
   updatedAt: string;
 };
 
+type PendingTryOnQueue = {
+  version: 1;
+  id: string;
+  deviceId: string;
+  garmentIds: string[];
+  quality: TryOnRenderQuality;
+  outfitId?: string;
+  renderFileUri?: string;
+  updatedAt: string;
+};
+
 const cloudKeys = {
   apiUrl: "vesta.api-url",
   dispatchToken: "vesta.dispatch-token",
@@ -181,7 +194,73 @@ const cloudKeys = {
 const CLOUD_CONNECT_URL = "https://vesta-armario-alan.alangael2411.chatgpt.site/api/v1/pairing";
 const TRY_ON_RENDER_PREFIX = "vesta-try-on-render";
 const IMPORT_QUEUE_MANIFEST = "vesta-import-queue.json";
+const TRY_ON_QUEUE_MANIFEST = "vesta-try-on-queue.json";
+const WARDROBE_INDEX_CACHE = "wardrobe.json";
 const IMPORT_UPLOAD_CONCURRENCY = 3;
+const WARDROBE_DOWNLOAD_CONCURRENCY = 4;
+
+function wardrobeIndexCachePath(session: CloudSession) {
+  return FileSystem.documentDirectory ? `${FileSystem.documentDirectory}vesta-${accountCachePrefix(session)}-${WARDROBE_INDEX_CACHE}` : null;
+}
+
+function wardrobeImageCachePath(session: CloudSession, garmentId: ItemId) {
+  if (!FileSystem.documentDirectory) return null;
+  const safeGarmentId = String(garmentId).replace(/[^a-z0-9_-]/giu, "_");
+  return `${FileSystem.documentDirectory}vesta-${accountCachePrefix(session)}-garment-${safeGarmentId}.png`;
+}
+
+async function readWardrobeCache(session: CloudSession) {
+  const path = wardrobeIndexCachePath(session);
+  if (!path) return [];
+  try {
+    const info = await FileSystem.getInfoAsync(path);
+    if (!info.exists) return [];
+    const parsed = JSON.parse(await FileSystem.readAsStringAsync(path)) as WardrobeItem[];
+    if (!Array.isArray(parsed)) return [];
+    const available = await Promise.all(parsed.map(async (item) => {
+      if (!item.localImageUri) return item;
+      const image = await FileSystem.getInfoAsync(item.localImageUri).catch(() => null);
+      return image?.exists ? item : { ...item, localImageUri: null };
+    }));
+    return available;
+  } catch {
+    return [];
+  }
+}
+
+async function persistWardrobeCache(session: CloudSession, items: WardrobeItem[]) {
+  const path = wardrobeIndexCachePath(session);
+  if (path) await FileSystem.writeAsStringAsync(path, JSON.stringify(items));
+}
+
+function tryOnQueueManifestPath() {
+  return FileSystem.documentDirectory ? `${FileSystem.documentDirectory}${TRY_ON_QUEUE_MANIFEST}` : null;
+}
+
+async function persistTryOnQueue(queue: PendingTryOnQueue) {
+  const path = tryOnQueueManifestPath();
+  if (!path) throw new Error("try_on_queue_unavailable");
+  await FileSystem.writeAsStringAsync(path, JSON.stringify(queue));
+}
+
+async function readTryOnQueue() {
+  const path = tryOnQueueManifestPath();
+  if (!path) return null;
+  try {
+    const info = await FileSystem.getInfoAsync(path);
+    if (!info.exists) return null;
+    const parsed = JSON.parse(await FileSystem.readAsStringAsync(path)) as PendingTryOnQueue;
+    if (parsed.version !== 1 || !parsed.id || !parsed.deviceId || !Array.isArray(parsed.garmentIds) || !parsed.garmentIds.length) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function clearTryOnQueue() {
+  const path = tryOnQueueManifestPath();
+  if (path) await FileSystem.deleteAsync(path, { idempotent: true }).catch(() => undefined);
+}
 
 function importQueueManifestPath() {
   return FileSystem.documentDirectory ? `${FileSystem.documentDirectory}${IMPORT_QUEUE_MANIFEST}` : null;
@@ -268,8 +347,12 @@ async function stageImportQueue(assets: ImagePicker.ImagePickerAsset[]) {
 }
 
 async function runImportPool<T>(values: T[], worker: (value: T, index: number) => Promise<void>) {
+  return runPool(values, IMPORT_UPLOAD_CONCURRENCY, worker);
+}
+
+async function runPool<T>(values: T[], concurrency: number, worker: (value: T, index: number) => Promise<void>) {
   let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(IMPORT_UPLOAD_CONCURRENCY, values.length) }, async () => {
+  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
     while (nextIndex < values.length) {
       const index = nextIndex;
       nextIndex += 1;
@@ -348,6 +431,15 @@ function Sprite({
 }
 
 function GarmentVisual({ item, session }: { item: WardrobeItem; session: CloudSession | null }) {
+  if (item.localImageUri) {
+    return (
+      <View style={[styles.spriteFrame, { aspectRatio: 1 }]}>
+        <Image source={{ uri: item.localImageUri }} resizeMode={item.imageKind === "cutout" ? "contain" : "cover"} style={styles.cloudGarmentImage} />
+        {item.imageKind === "evidence" && <View style={styles.evidenceBadge}><Text style={styles.evidenceBadgeText}>EVIDENCIA</Text></View>}
+        {item.sourceType === "internet" && <View style={styles.internetBadge}><Text style={styles.internetBadgeText}>WEB</Text></View>}
+      </View>
+    );
+  }
   if (item.imagePath && session) {
     return (
       <View style={[styles.spriteFrame, { aspectRatio: 1 }]}>
@@ -656,6 +748,8 @@ export default function App() {
   const [tryOnRenderedUri, setTryOnRenderedUri] = useState<string | null>(null);
   const [tryOnRenderedSignature, setTryOnRenderedSignature] = useState<string | null>(null);
   const [tryOnSavedOutfitId, setTryOnSavedOutfitId] = useState<string | null>(null);
+  const [pendingTryOn, setPendingTryOn] = useState<PendingTryOnQueue | null>(null);
+  const [tryOnResumeEpoch, setTryOnResumeEpoch] = useState(0);
   const [wardrobeDrag, setWardrobeDrag] = useState<WardrobeDrag | null>(null);
   const appRootRef = useRef<View | null>(null);
   const appRootWindow = useRef({ x: 0, y: 0 });
@@ -666,6 +760,7 @@ export default function App() {
   const tryOnGarmentBase64 = useRef(new Map<string, string>());
   const automaticCloudConnectionStarted = useRef(false);
   const importResumeStarted = useRef(false);
+  const tryOnResumeStarted = useRef(false);
   const pendingAnalysisOffered = useRef(false);
   const avatarOnboardingOffered = useRef(false);
   const legacyAvatarMigrationStarted = useRef(false);
@@ -782,6 +877,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    readTryOnQueue().then((queue) => {
+      if (queue) setPendingTryOn(queue);
+    }).catch(() => undefined);
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state !== "active") return;
+      tryOnResumeStarted.current = false;
+      setTryOnResumeEpoch((current) => current + 1);
+    });
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
     if (!cloudSession || !pendingImport || importStage !== "waiting" || importResumeStarted.current) return;
     importResumeStarted.current = true;
     uploadBatch(pendingImport).catch(() => undefined);
@@ -811,19 +918,51 @@ export default function App() {
     if (!session) return;
     setWardrobeLoading(true);
     try {
+      const cachedItems = await readWardrobeCache(session);
+      if (cachedItems.length) setCloudWardrobe(cachedItems);
       const response = await cloudFetch(session, "/api/v1/wardrobe", { method: "GET" });
-      if (!response.ok) return;
+      if (!response.ok) return cachedItems;
       const result = await response.json() as { garments: CloudGarment[]; duplicateCount?: number };
-      const items = result.garments.map((item) => ({
-        ...item,
-        category: categoryForUi(item.category),
-      }));
+      const cachedById = new Map(cachedItems.map((item) => [String(item.id), item]));
+      const items = result.garments.map((item) => {
+        const cached = cachedById.get(String(item.id));
+        return {
+          ...item,
+          category: categoryForUi(item.category),
+          localImageUri: cached && cached.imagePath === item.imagePath ? cached.localImageUri : null,
+        };
+      });
       setCloudWardrobe(items);
       setDuplicateCount(result.duplicateCount ?? 0);
+      await persistWardrobeCache(session, items);
+      cacheWardrobeImages(session, items).catch(() => undefined);
       return items;
     } finally {
       setWardrobeLoading(false);
     }
+  }
+
+  async function cacheWardrobeImages(session: CloudSession, values: WardrobeItem[]) {
+    const nextItems = [...values];
+    await runPool(values, WARDROBE_DOWNLOAD_CONCURRENCY, async (item, index) => {
+      if (!item.imagePath || item.localImageUri) return;
+      const localPath = wardrobeImageCachePath(session, item.id);
+      if (!localPath) return;
+      await FileSystem.deleteAsync(localPath, { idempotent: true }).catch(() => undefined);
+      const download = await FileSystem.downloadAsync(`${session.apiUrl}${item.imagePath}`, localPath, {
+        headers: {
+          "OAI-Sites-Authorization": `Bearer ${session.dispatchToken}`,
+          "x-vesta-device-token": session.deviceToken,
+        },
+        sessionType: FileSystem.FileSystemSessionType.BACKGROUND,
+      }).catch(() => null);
+      if (!download || download.status < 200 || download.status >= 300) return;
+      nextItems[index] = { ...item, localImageUri: localPath };
+      setCloudWardrobe((current) => current.map((entry) => String(entry.id) === String(item.id)
+        ? { ...entry, localImageUri: localPath }
+        : entry));
+    });
+    await persistWardrobeCache(session, nextItems);
   }
 
   async function loadOutfits(session = cloudSession) {
@@ -1861,36 +2000,82 @@ export default function App() {
     }
   };
 
-  const saveTryOnAsOutfit = async (layers: TryOnLayer[], imageBase64: string) => {
+  const ensureTryOnOutfit = async (layers: TryOnLayer[]) => {
     if (!cloudSession) throw new Error("outfit_cloud_unavailable");
     const response = await cloudFetch(cloudSession, "/api/v1/outfits", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ garmentIds: layers.map((layer) => String(layer.item.id)) }),
     });
-    const payload = await response.json() as { selectedOutfitId?: string; error?: string };
+    const payload = await response.json() as { selectedOutfitId?: string; outfits?: CloudOutfit[]; error?: string };
     if (!response.ok) throw new Error(payload.error || `outfit_save_${response.status}`);
     if (!payload.selectedOutfitId) throw new Error("outfit_save_id_missing");
-    await uploadOutfitRender(cloudSession, payload.selectedOutfitId, imageBase64);
-    const localLookPath = outfitCachePath(cloudSession, payload.selectedOutfitId);
+    if (payload.outfits) setOutfits(outfitsForUi(payload.outfits));
+    return payload.selectedOutfitId;
+  };
+
+  const saveTryOnRender = async (outfitId: string, imageBase64: string) => {
+    if (!cloudSession) throw new Error("outfit_cloud_unavailable");
+    await uploadOutfitRender(cloudSession, outfitId, imageBase64);
+    const localLookPath = outfitCachePath(cloudSession, outfitId);
     if (localLookPath) {
       await FileSystem.writeAsStringAsync(localLookPath, imageBase64, { encoding: FileSystem.EncodingType.Base64 });
     }
     await loadOutfits(cloudSession);
-    return payload.selectedOutfitId;
   };
 
   const renderRealTryOn = async (
     layers: TryOnLayer[],
     previousLayers: TryOnLayer[],
     quality: TryOnRenderQuality = "low",
+    queuedJob?: PendingTryOnQueue,
   ) => {
     if (!cloudSession || !FileSystem.cacheDirectory || !FileSystem.documentDirectory) return;
     const startedAt = Date.now();
+    tryOnResumeStarted.current = true;
     setTryOnRenderingQuality(quality);
     setTryOnRendering(true);
     const temporaryPaths: string[] = [];
     try {
+      let queue: PendingTryOnQueue = queuedJob || {
+        version: 1,
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        deviceId: cloudSession.deviceId,
+        garmentIds: layers.map((layer) => String(layer.item.id)),
+        quality,
+        updatedAt: new Date().toISOString(),
+      };
+      await persistTryOnQueue(queue);
+      setPendingTryOn(queue);
+
+      const outfitId = queue.outfitId || await ensureTryOnOutfit(layers);
+      if (!queue.outfitId) {
+        queue = { ...queue, outfitId, updatedAt: new Date().toISOString() };
+        await persistTryOnQueue(queue);
+        setPendingTryOn(queue);
+      }
+
+      let generatedImageBase64: string | null = null;
+      if (queue.renderFileUri) {
+        const rendered = await FileSystem.getInfoAsync(queue.renderFileUri).catch(() => null);
+        if (rendered?.exists) {
+          generatedImageBase64 = await FileSystem.readAsStringAsync(queue.renderFileUri, { encoding: FileSystem.EncodingType.Base64 });
+          setTryOnRenderedUri(queue.renderFileUri);
+          setTryOnRenderedSignature(tryOnSignatureFor(layers));
+          setTryOnResultQuality(quality);
+        }
+      }
+
+      if (generatedImageBase64) {
+        await saveTryOnRender(outfitId, generatedImageBase64);
+        setTryOnSavedOutfitId(outfitId);
+        await clearTryOnQueue();
+        setPendingTryOn(null);
+        tryOnResumeStarted.current = false;
+        showNotice("Look terminado", "La foto pendiente ya quedó guardada en Looks.", "success");
+        return;
+      }
+
       const avatarPreparationStartedAt = Date.now();
       const avatarBase64 = await accountAvatarBase64();
       const avatarPreparationMs = Date.now() - avatarPreparationStartedAt;
@@ -1942,19 +2127,25 @@ export default function App() {
       setTryOnRenderedUri(outputPath);
       setTryOnRenderedSignature(tryOnSignatureFor(layers));
       setTryOnResultQuality(quality);
+      queue = { ...queue, renderFileUri: outputPath, updatedAt: new Date().toISOString() };
+      await persistTryOnQueue(queue);
+      setPendingTryOn(queue);
       if (previousRender?.startsWith("file:")) {
         await FileSystem.deleteAsync(previousRender, { idempotent: true }).catch(() => undefined);
       }
       const cloudSaveStartedAt = Date.now();
       let cloudUploadMs = 0;
       try {
-        const savedOutfitId = await saveTryOnAsOutfit(layers, generated.imageBase64);
-        setTryOnSavedOutfitId(savedOutfitId);
+        await saveTryOnRender(outfitId, generated.imageBase64);
+        setTryOnSavedOutfitId(outfitId);
         cloudUploadMs = Date.now() - cloudSaveStartedAt;
-      } catch {
+        await clearTryOnQueue();
+        setPendingTryOn(null);
+        tryOnResumeStarted.current = false;
+      } catch (error) {
         cloudUploadMs = Date.now() - cloudSaveStartedAt;
         setTryOnSavedOutfitId(null);
-        showNotice("Look listo, guardado pendiente", "La foto está en tu probador y volveremos a intentar guardarla.", "error");
+        throw error;
       }
       await recordAvatarGenerationAudit({
         recordedAt: new Date().toISOString(),
@@ -1983,16 +2174,57 @@ export default function App() {
         setCodexConnected(false);
         showNotice("Vuelve a conectar tu cuenta", "La sesión expiró. Reconéctala desde tu perfil.", "error");
       } else if (detail === "moderation_blocked") {
+        await clearTryOnQueue();
+        setPendingTryOn(null);
         showNotice("No se pudo crear esta prueba", "Tu avatar y tus prendas siguen intactos.", "error");
       } else {
         console.info("[Outfit Club try-on]", detail);
-        showNotice("La prueba no terminó", "Tu Look anterior no cambió. Puedes reintentarlo.", "error");
+        showNotice("Creación pausada", "Tu outfit quedó guardado y continuará automáticamente cuando vuelvas a abrir la app.", "error");
       }
     } finally {
       await Promise.all(temporaryPaths.map((path) => FileSystem.deleteAsync(path, { idempotent: true }).catch(() => undefined)));
       setTryOnRendering(false);
     }
   };
+
+  useEffect(() => {
+    if (!pendingTryOn || !cloudSession || tryOnRendering || tryOnResumeStarted.current) return;
+    if (pendingTryOn.deviceId !== cloudSession.deviceId) {
+      clearTryOnQueue().catch(() => undefined);
+      setPendingTryOn(null);
+      return;
+    }
+    if (!pendingTryOn.renderFileUri && (!codexConnected || (!localAvatarUri && !cloudAvatar))) return;
+    if (wardrobeLoading) return;
+    const wardrobeById = new Map(cloudWardrobe.map((item) => [String(item.id), item]));
+    const queuedLayers = pendingTryOn.garmentIds
+      .map((garmentId, index) => {
+        const item = wardrobeById.get(garmentId);
+        return item?.imagePath && item.imageKind === "cutout" ? { key: `${garmentId}-resume-${index}`, item } : null;
+      })
+      .filter((layer): layer is TryOnLayer => Boolean(layer));
+    if (queuedLayers.length !== pendingTryOn.garmentIds.length) {
+      clearTryOnQueue().catch(() => undefined);
+      setPendingTryOn(null);
+      showNotice("No se pudo reanudar", "Una de las prendas ya no está disponible en tu armario.", "error");
+      return;
+    }
+    tryOnResumeStarted.current = true;
+    setTryOnLayers(queuedLayers);
+    setView("builder");
+    renderRealTryOn(queuedLayers, queuedLayers, pendingTryOn.quality, pendingTryOn).catch(() => undefined);
+  }, [
+    pendingTryOn?.id,
+    pendingTryOn?.updatedAt,
+    cloudSession?.deviceId,
+    codexConnected,
+    cloudAvatar?.version,
+    localAvatarUri,
+    cloudWardrobe,
+    wardrobeLoading,
+    tryOnRendering,
+    tryOnResumeEpoch,
+  ]);
 
   const addToTryOn = (item: WardrobeItem) => {
     if (tryOnRendering) return;
