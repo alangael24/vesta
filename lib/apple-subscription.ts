@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { Environment, SignedDataVerifier } from "@apple/app-store-server-library";
+import { verify, X509Certificate } from "node:crypto";
 import { subscriptionProducts } from "./subscription-plans.ts";
 
 const bundleId = "com.alangael.vesta";
@@ -24,32 +24,58 @@ export type VerifiedAppleSubscription = {
 
 export async function verifyAppleSubscription(signedTransaction: string): Promise<VerifiedAppleSubscription> {
   if (!signedTransaction || signedTransaction.length > 32_000) throw new Error("invalid_signed_transaction");
-  const attempts: Array<{ environment: Environment; appId?: number }> = [
-    { environment: Environment.PRODUCTION, appId: appAppleId },
-    { environment: Environment.SANDBOX },
-  ];
-  for (const attempt of attempts) {
-    try {
-      const verifier = new SignedDataVerifier(appleRootCertificates, true, attempt.environment, bundleId, attempt.appId);
-      const transaction = await verifier.verifyAndDecodeTransaction(signedTransaction);
-      if (!transaction.productId || !subscriptionProducts.has(transaction.productId)) throw new Error("unknown_subscription_product");
-      if (!transaction.originalTransactionId || !transaction.transactionId || !transaction.purchaseDate || !transaction.expiresDate) {
-        throw new Error("incomplete_subscription_transaction");
-      }
-      const revoked = Boolean(transaction.revocationDate);
-      const expired = transaction.expiresDate <= Date.now();
-      return {
-        productId: transaction.productId,
-        originalTransactionId: transaction.originalTransactionId,
-        transactionId: transaction.transactionId,
-        environment: attempt.environment as "Sandbox" | "Production",
-        purchasedAt: new Date(transaction.purchaseDate).toISOString(),
-        expiresAt: new Date(transaction.expiresDate).toISOString(),
-        status: revoked ? "revoked" : expired ? "expired" : "active",
-      };
-    } catch {
-      // A StoreKit sandbox transaction is expected to fail production verification first.
+  try {
+    const parts = signedTransaction.split(".");
+    if (parts.length !== 3) throw new Error("invalid_jws_shape");
+    const header = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8")) as { alg?: string; x5c?: string[] };
+    const transaction = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as {
+      productId?: string;
+      originalTransactionId?: string;
+      transactionId?: string;
+      bundleId?: string;
+      environment?: string;
+      purchaseDate?: number;
+      expiresDate?: number;
+      signedDate?: number;
+      revocationDate?: number;
+      appAppleId?: number;
+    };
+    if (header.alg !== "ES256" || header.x5c?.length !== 3) throw new Error("invalid_apple_jws_header");
+    const [leaf, intermediate, presentedRoot] = header.x5c.map((certificate) => new X509Certificate(Buffer.from(certificate, "base64")));
+    const trustedRoots = appleRootCertificates.map((certificate) => new X509Certificate(certificate));
+    const trustedRoot = trustedRoots.find((root) => root.fingerprint256 === presentedRoot.fingerprint256);
+    if (!trustedRoot || !leaf.checkIssued(intermediate) || !intermediate.checkIssued(presentedRoot)) throw new Error("untrusted_apple_chain");
+    if (!leaf.verify(intermediate.publicKey) || !intermediate.verify(presentedRoot.publicKey)) throw new Error("invalid_apple_chain_signature");
+    const effectiveDate = transaction.signedDate || Date.now();
+    for (const certificate of [leaf, intermediate, presentedRoot]) {
+      if (effectiveDate < Date.parse(certificate.validFrom) || effectiveDate > Date.parse(certificate.validTo)) throw new Error("expired_apple_certificate");
     }
+    const signatureValid = verify(
+      "sha256",
+      Buffer.from(`${parts[0]}.${parts[1]}`),
+      { key: leaf.publicKey, dsaEncoding: "ieee-p1363" },
+      Buffer.from(parts[2], "base64url"),
+    );
+    if (!signatureValid) throw new Error("invalid_apple_signature");
+    if (transaction.bundleId !== bundleId || (transaction.appAppleId && transaction.appAppleId !== appAppleId)) throw new Error("wrong_app_transaction");
+    if (transaction.environment !== "Production" && transaction.environment !== "Sandbox") throw new Error("invalid_apple_environment");
+    if (!transaction.productId || !subscriptionProducts.has(transaction.productId)) throw new Error("unknown_subscription_product");
+    if (!transaction.originalTransactionId || !transaction.transactionId || !transaction.purchaseDate || !transaction.expiresDate) {
+      throw new Error("incomplete_subscription_transaction");
+    }
+    if (effectiveDate > Date.now() + 5 * 60_000) throw new Error("future_apple_signature");
+    const revoked = Boolean(transaction.revocationDate);
+    const expired = transaction.expiresDate <= Date.now();
+    return {
+      productId: transaction.productId,
+      originalTransactionId: transaction.originalTransactionId,
+      transactionId: transaction.transactionId,
+      environment: transaction.environment,
+      purchasedAt: new Date(transaction.purchaseDate).toISOString(),
+      expiresAt: new Date(transaction.expiresDate).toISOString(),
+      status: revoked ? "revoked" : expired ? "expired" : "active",
+    };
+  } catch {
+    throw new Error("apple_subscription_verification_failed");
   }
-  throw new Error("apple_subscription_verification_failed");
 }
