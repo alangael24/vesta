@@ -2,6 +2,7 @@ import { StatusBar } from "expo-status-bar";
 import * as Clipboard from "expo-clipboard";
 import * as Device from "expo-device";
 import * as FileSystem from "expo-file-system/legacy";
+import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import * as SecureStore from "expo-secure-store";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
@@ -26,23 +27,6 @@ import {
   TextInput,
   View,
 } from "react-native";
-import {
-  beginDeviceAuthorization,
-  CODEX_DEVICE_URL,
-  completeDeviceAuthorization,
-  getCodexSession,
-  logoutCodex,
-} from "./codex-auth";
-import {
-  analyzeExperimentalInventory,
-  EXPERIMENTAL_CODEX_MODEL,
-  ExperimentalPhoto,
-  generateExperimentalAvatarImage,
-  generateExperimentalGarmentImage,
-  generateExperimentalTryOnImage,
-  prepareAvatarTryOnReference,
-  prepareTryOnGarmentReference,
-} from "./experimental-inventory";
 import { SubscriptionPaywall } from "./SubscriptionPaywall";
 import { PrivacyPolicyModal } from "./PrivacyPolicy";
 
@@ -93,25 +77,9 @@ type TryOnLayer = {
 
 type TryOnRenderQuality = "low" | "medium";
 type ProductPlacementHint = "auto" | "head" | "top" | "outer" | "legs" | "feet";
-
-type AvatarGenerationAudit = {
-  recordedAt: string;
-  flow: "builder" | "saved_look";
-  status: "completed";
-  quality: TryOnRenderQuality;
-  garmentCount: number;
-  garmentCacheHits: number;
-  garmentCacheMisses: number;
-  requestedSize: string;
-  avatarInputBytes: number;
-  garmentInputBytes: number;
-  outputBytes: number;
-  avatarPreparationMs: number;
-  garmentPreparationMs: number;
-  generationRoundTripMs: number;
-  cloudUploadMs: number;
-  localSaveMs: number;
-  totalMs: number;
+type AvatarStatusPayload = {
+  avatar?: CloudAvatar;
+  generation?: { requestId: string; status: string; error?: string | null } | null;
 };
 
 type BodyRegion = "head" | "torso" | "legs" | "feet";
@@ -307,6 +275,16 @@ async function clearImportQueue(queue?: PendingImportQueue | null) {
   if (queue) {
     const directory = importQueueDirectory(queue.id);
     if (directory) await FileSystem.deleteAsync(directory, { idempotent: true }).catch(() => undefined);
+  }
+}
+
+async function clearPrivateLocalData() {
+  for (const directory of [FileSystem.documentDirectory, FileSystem.cacheDirectory]) {
+    if (!directory) continue;
+    const entries = await FileSystem.readDirectoryAsync(directory).catch(() => []);
+    await Promise.all(entries
+      .filter((name) => name.startsWith("vesta-"))
+      .map((name) => FileSystem.deleteAsync(`${directory}${name}`, { idempotent: true }).catch(() => undefined)));
   }
 }
 
@@ -729,6 +707,9 @@ export default function App() {
   const [reviewEmail, setReviewEmail] = useState("");
   const [reviewPassword, setReviewPassword] = useState("");
   const [reviewSigningIn, setReviewSigningIn] = useState(false);
+  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [deletingGarmentId, setDeletingGarmentId] = useState<ItemId | null>(null);
+  const [deletingOutfitId, setDeletingOutfitId] = useState<string | null>(null);
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const [paywallOpen, setPaywallOpen] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
@@ -736,8 +717,6 @@ export default function App() {
   const [avatarFullBody, setAvatarFullBody] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [avatarConsent, setAvatarConsent] = useState(false);
   const [avatarGenerating, setAvatarGenerating] = useState(false);
-  const [avatarSaving, setAvatarSaving] = useState(false);
-  const [avatarDraftUri, setAvatarDraftUri] = useState<string | null>(null);
   const [cloudAvatar, setCloudAvatar] = useState<CloudAvatar | null>(null);
   const [localAvatarUri, setLocalAvatarUri] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<WardrobeItem | null>(null);
@@ -753,16 +732,12 @@ export default function App() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [processing, setProcessing] = useState(false);
-  const [codexConnected, setCodexConnected] = useState(false);
-  const [codexConnecting, setCodexConnecting] = useState(false);
-  const [experimentalProgress, setExperimentalProgress] = useState(0);
   const [reconstructingId, setReconstructingId] = useState<ItemId | null>(null);
   const [cloudWardrobe, setCloudWardrobe] = useState<WardrobeItem[]>([]);
   const [outfits, setOutfits] = useState<Outfit[]>([]);
   const [outfitsLoading, setOutfitsLoading] = useState(false);
   const [outfitGenerating, setOutfitGenerating] = useState(false);
   const [outfitGenerationProgress, setOutfitGenerationProgress] = useState<{ current: number; total: number } | null>(null);
-  const [duplicateCount, setDuplicateCount] = useState(0);
   const [wardrobeLoading, setWardrobeLoading] = useState(false);
   const [tryOnLayers, setTryOnLayers] = useState<TryOnLayer[]>([]);
   const [tryOnRendering, setTryOnRendering] = useState(false);
@@ -778,9 +753,6 @@ export default function App() {
   const appRootWindow = useRef({ x: 0, y: 0 });
   const tryOnCanvasRef = useRef<View | null>(null);
   const tryOnCanvasWindow = useRef<WindowBounds | null>(null);
-  const tryOnAvatarBase64 = useRef<string | null>(null);
-  const avatarDraftBase64 = useRef<string | null>(null);
-  const tryOnGarmentBase64 = useRef(new Map<string, string>());
   const automaticCloudConnectionStarted = useRef(false);
   const importResumeStarted = useRef(false);
   const tryOnResumeStarted = useRef(false);
@@ -819,6 +791,11 @@ export default function App() {
     try {
       parsed = new URL(url);
     } catch {
+      return;
+    }
+    if (parsed.protocol === "vesta:" && parsed.hostname === "review") {
+      setProfileOpen(false);
+      setReviewLoginOpen(true);
       return;
     }
     if (parsed.protocol !== "vesta:" || parsed.hostname !== "pair") return;
@@ -930,10 +907,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    getCodexSession().then((session) => setCodexConnected(Boolean(session))).catch(() => undefined);
-  }, []);
-
-  useEffect(() => {
     readImportQueue().then((queue) => {
       if (!queue) return;
       setPendingImport(queue);
@@ -962,10 +935,12 @@ export default function App() {
   }, [cloudSession?.apiUrl, cloudSession?.deviceToken, importStage, pendingImport?.id]);
 
   useEffect(() => {
-    if (!cloudSession || !codexConnected || pendingAnalysisOffered.current) return;
+    if (!cloudSession || pendingImport || pendingAnalysisOffered.current) return;
     pendingAnalysisOffered.current = true;
-    offerPendingExperimentalAnalysis(cloudSession).catch(() => undefined);
-  }, [cloudSession?.apiUrl, cloudSession?.deviceToken, codexConnected]);
+    resumePendingAnalysis(cloudSession).catch(() => {
+      pendingAnalysisOffered.current = false;
+    });
+  }, [cloudSession?.deviceToken, pendingImport?.id]);
 
   useEffect(() => {
     if (!cloudSession) {
@@ -973,13 +948,25 @@ export default function App() {
       setOutfits([]);
       setCloudAvatar(null);
       setLocalAvatarUri(null);
-      tryOnAvatarBase64.current = null;
+      pendingAnalysisOffered.current = false;
       avatarOnboardingOffered.current = false;
       legacyAvatarMigrationStarted.current = false;
       return;
     }
     Promise.all([loadWardrobe(cloudSession), loadOutfits(cloudSession), loadAvatar(cloudSession)]).catch(() => undefined);
   }, [cloudSession?.apiUrl, cloudSession?.deviceToken]);
+
+  useEffect(() => {
+    if (!cloudSession || !outfits.some((outfit) => outfit.status === "rendering")) return;
+    const interval = setInterval(() => loadOutfits(cloudSession).catch(() => undefined), 1800);
+    return () => clearInterval(interval);
+  }, [cloudSession?.deviceToken, outfits.some((outfit) => outfit.status === "rendering")]);
+
+  useEffect(() => {
+    if (!cloudSession || !cloudWardrobe.some((item) => item.status === "reconstructing")) return;
+    const interval = setInterval(() => loadWardrobe(cloudSession).catch(() => undefined), 1800);
+    return () => clearInterval(interval);
+  }, [cloudSession?.deviceToken, cloudWardrobe.some((item) => item.status === "reconstructing")]);
 
   async function loadWardrobe(session = cloudSession) {
     if (!session) return;
@@ -1000,7 +987,6 @@ export default function App() {
         };
       });
       setCloudWardrobe(items);
-      setDuplicateCount(result.duplicateCount ?? 0);
       await persistWardrobeCache(session, items);
       cacheWardrobeImages(session, items).catch(() => undefined);
       return items;
@@ -1083,7 +1069,18 @@ export default function App() {
     }
     const response = await cloudFetch(session, "/api/v1/avatar", { method: "GET" });
     if (!response.ok) return;
-    const result = await response.json() as { avatar?: CloudAvatar | null; legacyAvatarEligible?: boolean };
+    const result = await response.json() as {
+      avatar?: CloudAvatar | null;
+      legacyAvatarEligible?: boolean;
+      generation?: { requestId: string; status: "running" | "completed" | "failed"; error?: string | null } | null;
+    };
+    if (result.generation?.status === "running") {
+      setAvatarGenerating(true);
+      setAvatarOpen(false);
+      setTimeout(() => loadAvatar(session).catch(() => undefined), 1400);
+      return;
+    }
+    setAvatarGenerating(false);
     if (!result.avatar) {
       if (result.legacyAvatarEligible) {
         await restoreLegacyAvatar(session, cachedPath);
@@ -1091,7 +1088,6 @@ export default function App() {
       }
       setCloudAvatar(null);
       setLocalAvatarUri(null);
-      tryOnAvatarBase64.current = null;
       if (cachedPath) await FileSystem.deleteAsync(cachedPath, { idempotent: true }).catch(() => undefined);
       if (!avatarOnboardingOffered.current) {
         avatarOnboardingOffered.current = true;
@@ -1114,7 +1110,6 @@ export default function App() {
     await FileSystem.deleteAsync(cachedPath, { idempotent: true }).catch(() => undefined);
     await FileSystem.moveAsync({ from: nextPath, to: cachedPath });
     setLocalAvatarUri(cachedPath);
-    tryOnAvatarBase64.current = null;
   }
 
   async function restoreLegacyAvatar(session: CloudSession, cachedPath: string | null) {
@@ -1125,7 +1120,6 @@ export default function App() {
     setLocalAvatarUri(bundledAvatar.uri);
     try {
       const base64 = await FileSystem.readAsStringAsync(bundledAvatar.uri, { encoding: FileSystem.EncodingType.Base64 });
-      tryOnAvatarBase64.current = await prepareAvatarTryOnReference(bundledAvatar.uri);
       const avatar = await uploadAccountAvatar(session, base64);
       if (cachedPath) {
         await FileSystem.writeAsStringAsync(cachedPath, base64, { encoding: FileSystem.EncodingType.Base64 });
@@ -1171,49 +1165,11 @@ export default function App() {
     if (indexPath) await FileSystem.writeAsStringAsync(indexPath, JSON.stringify(nextOutfits));
   }
 
-  async function accountAvatarBase64() {
-    if (tryOnAvatarBase64.current) return tryOnAvatarBase64.current;
-    if (!cloudSession) throw new Error("avatar_cloud_unavailable");
-    const localPath = localAvatarUri || avatarCachePath(cloudSession);
-    if (localPath) {
-      const info = await FileSystem.getInfoAsync(localPath).catch(() => null);
-      if (info?.exists) {
-        tryOnAvatarBase64.current = await prepareAvatarTryOnReference(localPath);
-        return tryOnAvatarBase64.current;
-      }
-    }
-    if (!cloudAvatar?.mediaPath || !localPath) throw new Error("avatar_required");
-    const download = await FileSystem.downloadAsync(`${cloudSession.apiUrl}${cloudAvatar.mediaPath}`, localPath, {
-      headers: {
-        "OAI-Sites-Authorization": `Bearer ${cloudSession.dispatchToken}`,
-        "x-vesta-device-token": cloudSession.deviceToken,
-      },
-      sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
-    });
-    if (download.status < 200 || download.status >= 300) throw new Error(`avatar_download_${download.status}`);
-    setLocalAvatarUri(localPath);
-    tryOnAvatarBase64.current = await prepareAvatarTryOnReference(localPath);
-    return tryOnAvatarBase64.current;
-  }
-
   async function generateSavedOutfits() {
     if (!cloudSession || outfitGenerating) return;
     if (!localAvatarUri && !cloudAvatar) {
-      Alert.alert("Crea tu avatar primero", "Outfit Club necesita tu avatar privado antes de poder mostrar cómo te quedan los Looks.", [
-        { text: "Después", style: "cancel" },
-        { text: "Crear avatar", onPress: () => setAvatarOpen(true) },
-      ]);
-      return;
-    }
-    if (!codexConnected) {
-      Alert.alert(
-        "Conecta tu cuenta para crear las fotos",
-        "Tus combinaciones ya están guardadas. La conexión sólo se usa al crear una foto nueva.",
-        [
-          { text: "Ahora no", style: "cancel" },
-          { text: "Conectar", onPress: connectCodexExperiment },
-        ],
-      );
+      showNotice("Crea tu avatar primero", "Solo necesitas una selfie y una foto de cuerpo completo.");
+      setAvatarOpen(true);
       return;
     }
     setOutfitGenerating(true);
@@ -1265,17 +1221,6 @@ export default function App() {
       setAvatarOpen(true);
       return;
     }
-    if (!codexConnected) {
-      Alert.alert(
-        "Conecta tu cuenta para crear esta foto",
-        "La conexión sólo se utiliza mientras creamos la imagen con las prendas elegidas.",
-        [
-          { text: "Ahora no", style: "cancel" },
-          { text: "Conectar", onPress: connectCodexExperiment },
-        ],
-      );
-      return;
-    }
     setOutfitGenerating(true);
     try {
       await completeOutfitPhotographs([outfit]);
@@ -1293,7 +1238,7 @@ export default function App() {
       setOutfitGenerationProgress({ current: index + 1, total: targets.length });
       try {
         const { renderPath, localRenderUri } = await renderOutfitPhotograph(outfit);
-        const freshRenderPath = `${renderPath}?v=${Date.now()}`;
+        const freshRenderPath = renderPath;
         setOutfits((current) => current.map((entry) => entry.id === outfit.id
           ? { ...entry, renderPath: freshRenderPath, localRenderUri, status: "ready" }
           : entry));
@@ -1303,12 +1248,7 @@ export default function App() {
         completed += 1;
       } catch (error) {
         failed += 1;
-        const detail = error instanceof Error ? error.message : "unknown";
-        if (/codex_not_connected|token_refresh|401/u.test(detail)) {
-          setCodexConnected(false);
-          failed += targets.length - index - 1;
-          break;
-        }
+        console.info("[Outfit Club look render]", error instanceof Error ? error.message : "unknown");
       }
     }
     if (completed > 0 && cloudSession) await loadOutfits(cloudSession).catch(() => undefined);
@@ -1324,91 +1264,49 @@ export default function App() {
   }
 
   async function renderOutfitPhotograph(outfit: Outfit) {
-    if (!cloudSession || !FileSystem.cacheDirectory) throw new Error("outfit_cloud_unavailable");
-    const startedAt = Date.now();
-    const temporaryPaths: string[] = [];
-    let usageReservationId: string | null = null;
-    try {
-      usageReservationId = await reserveLookGeneration(`saved-look:${outfit.id}:${Date.now()}`);
-      const avatarPreparationStartedAt = Date.now();
-      const avatarBase64 = await accountAvatarBase64();
-      const avatarPreparationMs = Date.now() - avatarPreparationStartedAt;
-      const garmentPreparationStartedAt = Date.now();
-      let garmentCacheHits = 0;
-      let garmentCacheMisses = 0;
-      const garmentInputs = [];
-      for (const item of outfit.pieces.filter((piece) => piece.imagePath && piece.imageKind === "cutout")) {
-        const cacheKey = `${item.id}:${item.imagePath}`;
-        let imageBase64 = tryOnGarmentBase64.current.get(cacheKey);
-        if (imageBase64) {
-          garmentCacheHits += 1;
-        } else {
-          garmentCacheMisses += 1;
-          const localPath = `${FileSystem.cacheDirectory}${TRY_ON_RENDER_PREFIX}-look-${item.id}.png`;
-          await FileSystem.deleteAsync(localPath, { idempotent: true }).catch(() => undefined);
-          const download = await FileSystem.downloadAsync(`${cloudSession.apiUrl}${item.imagePath}`, localPath, {
-            headers: {
-              "OAI-Sites-Authorization": `Bearer ${cloudSession.dispatchToken}`,
-              "x-vesta-device-token": cloudSession.deviceToken,
-            },
-            sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
-          });
-          if (download.status < 200 || download.status >= 300) throw new Error(`outfit_garment_download_${download.status}`);
-          temporaryPaths.push(download.uri);
-          imageBase64 = await prepareTryOnGarmentReference(download.uri);
-          if (tryOnGarmentBase64.current.size >= 12) {
-            const oldestKey = tryOnGarmentBase64.current.keys().next().value;
-            if (oldestKey) tryOnGarmentBase64.current.delete(oldestKey);
-          }
-          tryOnGarmentBase64.current.set(cacheKey, imageBase64);
-        }
-        garmentInputs.push({
-          name: item.name,
-          type: item.type,
-          color: item.color,
-          description: item.description,
-          placement: imagePlacementFor(item),
-          imageBase64,
-        });
-      }
-      if (!garmentInputs.length) throw new Error("outfit_cutouts_missing");
-      const garmentPreparationMs = Date.now() - garmentPreparationStartedAt;
-      const generated = await generateExperimentalTryOnImage(avatarBase64, garmentInputs, "low");
-      const cloudUploadStartedAt = Date.now();
-      const renderPath = await uploadOutfitRender(cloudSession, outfit.id, generated.imageBase64, usageReservationId);
-      usageReservationId = null;
-      const cloudUploadMs = Date.now() - cloudUploadStartedAt;
-      const localRenderUri = outfitCachePath(cloudSession, outfit.id);
-      const localSaveStartedAt = Date.now();
-      if (localRenderUri) {
-        await FileSystem.writeAsStringAsync(localRenderUri, generated.imageBase64, { encoding: FileSystem.EncodingType.Base64 });
-      }
-      const localSaveMs = Date.now() - localSaveStartedAt;
-      await recordAvatarGenerationAudit({
-        recordedAt: new Date().toISOString(),
-        flow: "saved_look",
-        status: "completed",
-        quality: "low",
-        garmentCount: garmentInputs.length,
-        garmentCacheHits,
-        garmentCacheMisses,
-        ...generated.metrics,
-        avatarPreparationMs,
-        garmentPreparationMs,
-        cloudUploadMs,
-        localSaveMs,
-        totalMs: Date.now() - startedAt,
-      });
-      return { renderPath, localRenderUri };
-    } catch (error) {
-      if (usageReservationId) await releaseUsageReservation(usageReservationId).catch(() => undefined);
-      throw error;
-    } finally {
-      await Promise.all(temporaryPaths.map((path) => FileSystem.deleteAsync(path, { idempotent: true }).catch(() => undefined)));
-    }
+    return requestCloudOutfitRender(outfit.id, "low", `saved-${outfit.id}-${Date.now()}`, false);
   }
 
-  async function offerPendingExperimentalAnalysis(session: CloudSession) {
+  async function requestCloudOutfitRender(outfitId: string, quality: TryOnRenderQuality, requestId: string, force: boolean) {
+    if (!cloudSession) throw new Error("outfit_cloud_unavailable");
+    const response = await cloudFetch(cloudSession, `/api/v1/outfits/${outfitId}/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requestId, quality, force }),
+    });
+    const initial = await response.json() as { status?: string; renderPath?: string; error?: string };
+    if (!response.ok && response.status !== 202) {
+      if (response.status === 402 || response.status === 429) setPaywallOpen(true);
+      throw new Error(initial.error || `outfit_generate_${response.status}`);
+    }
+
+    let renderPath = initial.renderPath || null;
+    for (let attempt = 0; !renderPath && attempt < 150; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, attempt < 12 ? 900 : 1500));
+      const statusResponse = await cloudFetch(cloudSession, `/api/v1/outfits/${outfitId}/generate`, { method: "GET" });
+      if (!statusResponse.ok) continue;
+      const status = await statusResponse.json() as { status?: string; renderPath?: string; error?: string };
+      if (status.status === "failed") throw new Error(status.error || "try_on_generation_failed");
+      if (status.status === "completed" && status.renderPath) renderPath = status.renderPath;
+    }
+    if (!renderPath) throw new Error("try_on_still_running");
+
+    const localRenderUri = outfitCachePath(cloudSession, outfitId);
+    if (localRenderUri) {
+      await FileSystem.deleteAsync(localRenderUri, { idempotent: true }).catch(() => undefined);
+      const download = await FileSystem.downloadAsync(`${cloudSession.apiUrl}${renderPath}`, localRenderUri, {
+        headers: {
+          "OAI-Sites-Authorization": `Bearer ${cloudSession.dispatchToken}`,
+          "x-vesta-device-token": cloudSession.deviceToken,
+        },
+        sessionType: FileSystem.FileSystemSessionType.BACKGROUND,
+      });
+      if (download.status < 200 || download.status >= 300) throw new Error(`outfit_render_download_${download.status}`);
+    }
+    return { renderPath, localRenderUri };
+  }
+
+  async function resumePendingAnalysis(session: CloudSession) {
     const batchesResponse = await cloudFetch(session, "/api/v1/batches", { method: "GET" });
     if (!batchesResponse.ok) return;
     const payload = await batchesResponse.json() as { batches?: Array<{ id: string; status: string }> };
@@ -1421,38 +1319,7 @@ export default function App() {
 
   async function retryCloudBatch(session: CloudSession, batchId: string) {
     try {
-      const response = await cloudFetch(session, `/api/v1/batches/${batchId}`, { method: "GET" });
-      if (!response.ok) throw await uploadError("pending_batch", response);
-      const payload = await response.json() as {
-        photos?: Array<{ id: string; filename: string; contentType: string; sizeBytes: number; width: number | null; height: number | null; downloadPath: string }>;
-      };
-      if (!payload.photos?.length || !FileSystem.cacheDirectory) throw new Error("pending_photos_missing");
-      const selectedPhotos: ExperimentalPhoto[] = [];
-      for (const photo of payload.photos) {
-        const extension = photo.filename.split(".").pop()?.replace(/[^a-z0-9]/giu, "") || "jpg";
-        const localPath = `${FileSystem.cacheDirectory}vesta-${photo.id}.${extension}`;
-        const download = await FileSystem.downloadAsync(`${session.apiUrl}${photo.downloadPath}`, localPath, {
-          headers: {
-            "OAI-Sites-Authorization": `Bearer ${session.dispatchToken}`,
-            "x-vesta-device-token": session.deviceToken,
-          },
-          sessionType: FileSystem.FileSystemSessionType.BACKGROUND,
-        });
-        if (download.status < 200 || download.status >= 300) throw new Error(`download_${download.status}`);
-        selectedPhotos.push({
-          id: photo.id,
-          asset: {
-            uri: download.uri,
-            width: photo.width || 1600,
-            height: photo.height || 1600,
-            fileName: photo.filename,
-            fileSize: photo.sizeBytes,
-            mimeType: photo.contentType,
-            type: "image",
-          },
-        });
-      }
-      const completed = await startExperimentalProcessing(batchId, selectedPhotos);
+      const completed = await startProcessing(batchId, "economy");
       if (completed && pendingImport?.batchId === batchId) {
         await clearImportQueue(pendingImport);
         setPendingImport(null);
@@ -1522,74 +1389,64 @@ export default function App() {
       base64: false,
     });
     if (result.canceled || !result.assets[0]) return;
-    await discardAvatarDraft();
     if (kind === "selfie") setAvatarSelfie(result.assets[0]);
     else setAvatarFullBody(result.assets[0]);
   };
 
-  const discardAvatarDraft = async () => {
-    const previous = avatarDraftUri;
-    avatarDraftBase64.current = null;
-    setAvatarDraftUri(null);
-    if (previous) await FileSystem.deleteAsync(previous, { idempotent: true }).catch(() => undefined);
-  };
-
   const generateAvatarDraft = async () => {
-    if (!avatarSelfie || !avatarFullBody || !avatarConsent || avatarGenerating) return;
-    if (!codexConnected) {
-      Alert.alert(
-        "Conecta tu cuenta para crear tu avatar",
-        "Tus referencias se utilizan sólo durante la creación y el resultado queda en tu cuenta privada.",
-        [
-          { text: "Ahora no", style: "cancel" },
-          { text: "Conectar", onPress: connectCodexExperiment },
-        ],
-      );
-      return;
-    }
-    if (!FileSystem.cacheDirectory) return;
+    if (!cloudSession || !avatarSelfie || !avatarFullBody || !avatarConsent || avatarGenerating) return;
     setAvatarGenerating(true);
+    const temporaryPaths: string[] = [];
     try {
-      const result = await generateExperimentalAvatarImage(avatarSelfie, avatarFullBody);
-      const draftPath = `${FileSystem.cacheDirectory}vesta-avatar-draft-${Date.now()}.png`;
-      await FileSystem.writeAsStringAsync(draftPath, result, { encoding: FileSystem.EncodingType.Base64 });
-      await discardAvatarDraft();
-      avatarDraftBase64.current = result;
-      setAvatarDraftUri(draftPath);
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : "unknown";
-      if (/codex_not_connected|token_refresh|401/u.test(detail)) setCodexConnected(false);
-      console.info("[Outfit Club avatar]", detail);
-      showNotice("El avatar no terminó", "Tus fotos siguen en este teléfono. Puedes reintentarlo.", "error");
-    } finally {
-      setAvatarGenerating(false);
-    }
-  };
-
-  const saveAvatarDraft = async () => {
-    if (!cloudSession || !avatarDraftBase64.current || avatarSaving) return;
-    setAvatarSaving(true);
-    try {
-      const avatar = await uploadAccountAvatar(cloudSession, avatarDraftBase64.current);
+      const [selfie, fullBody] = await Promise.all([
+        ImageManipulator.manipulateAsync(avatarSelfie.uri, [{ resize: { width: 1400 } }], { compress: 0.86, format: ImageManipulator.SaveFormat.JPEG }),
+        ImageManipulator.manipulateAsync(avatarFullBody.uri, [{ resize: { width: 1400 } }], { compress: 0.86, format: ImageManipulator.SaveFormat.JPEG }),
+      ]);
+      temporaryPaths.push(selfie.uri, fullBody.uri);
+      const form = new FormData();
+      const requestId = `avatar-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      form.append("requestId", requestId);
+      form.append("selfie", { uri: selfie.uri, name: "selfie.jpg", type: "image/jpeg" } as unknown as Blob);
+      form.append("fullBody", { uri: fullBody.uri, name: "full-body.jpg", type: "image/jpeg" } as unknown as Blob);
+      const response = await cloudFetch(cloudSession, "/api/v1/avatar", { method: "POST", body: form });
+      const initial = await response.json() as { status?: string; error?: string };
+      if (!response.ok && response.status !== 202) throw new Error(initial.error || "avatar_generation_failed");
+      let payload: AvatarStatusPayload | null = null;
+      for (let attempt = 0; attempt < 150; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, attempt < 12 ? 900 : 1500));
+        const statusResponse = await cloudFetch(cloudSession, "/api/v1/avatar", { method: "GET" });
+        if (!statusResponse.ok) continue;
+        payload = await statusResponse.json() as AvatarStatusPayload;
+        if (payload?.generation?.requestId !== requestId) continue;
+        if (payload.generation.status === "failed") throw new Error(payload.generation.error || "avatar_generation_failed");
+        if (payload.generation.status === "completed" && payload.avatar) break;
+      }
+      if (!payload?.avatar) throw new Error("avatar_still_running");
       const cachedPath = avatarCachePath(cloudSession);
       if (cachedPath) {
-        await FileSystem.writeAsStringAsync(cachedPath, avatarDraftBase64.current, { encoding: FileSystem.EncodingType.Base64 });
-        setLocalAvatarUri(cachedPath);
+        await FileSystem.deleteAsync(cachedPath, { idempotent: true }).catch(() => undefined);
+        const download = await FileSystem.downloadAsync(`${cloudSession.apiUrl}${payload.avatar.mediaPath}`, cachedPath, {
+          headers: {
+            "OAI-Sites-Authorization": `Bearer ${cloudSession.dispatchToken}`,
+            "x-vesta-device-token": cloudSession.deviceToken,
+          },
+          sessionType: FileSystem.FileSystemSessionType.BACKGROUND,
+        });
+        if (download.status >= 200 && download.status < 300) setLocalAvatarUri(download.uri);
       }
-      setCloudAvatar(avatar);
-      tryOnAvatarBase64.current = null;
-      await discardAvatarDraft();
+      setCloudAvatar(payload.avatar);
       setAvatarSelfie(null);
       setAvatarFullBody(null);
       setAvatarConsent(false);
       setAvatarOpen(false);
-      setProfileOpen(false);
-      showNotice("Avatar guardado", "Ya puedes probar prendas y generar Looks.", "success");
+      showNotice("Avatar listo", "Ya puedes vestirte con prendas y Looks completos.", "success");
     } catch (error) {
-      console.info("[Outfit Club avatar save]", error instanceof Error ? error.message : "unknown");
-      showNotice("No se guardó el avatar", "El borrador sigue disponible para reintentar.", "error");
+      const detail = error instanceof Error ? error.message : "unknown";
+      console.info("[Outfit Club avatar]", detail);
+      showNotice("El avatar no terminó", "Tus fotos siguen en este teléfono. Puedes reintentarlo.", "error");
     } finally {
-      setAvatarSaving(false);
+      await Promise.all(temporaryPaths.map((path) => FileSystem.deleteAsync(path, { idempotent: true }).catch(() => undefined)));
+      setAvatarGenerating(false);
     }
   };
 
@@ -1613,10 +1470,133 @@ export default function App() {
             if (cachedPath) await FileSystem.deleteAsync(cachedPath, { idempotent: true }).catch(() => undefined);
             setCloudAvatar(null);
             setLocalAvatarUri(null);
-            tryOnAvatarBase64.current = null;
             await clearTryOn();
             setAvatarOpen(false);
             showNotice("Avatar eliminado", "Tus Looks guardados permanecen intactos.", "success");
+          },
+        },
+      ],
+    );
+  };
+
+  const deleteGarment = (item: WardrobeItem) => {
+    if (!cloudSession || deletingGarmentId !== null) return;
+    Alert.alert(
+      `¿Eliminar ${item.name}?`,
+      "Se quitará de tu armario y del probador. Las fotografías de Looks que ya terminaste permanecen como recuerdos.",
+      [
+        { text: "Cancelar", style: "cancel" },
+        {
+          text: "Eliminar prenda",
+          style: "destructive",
+          onPress: async () => {
+            setDeletingGarmentId(item.id);
+            try {
+              const response = await cloudFetch(cloudSession, `/api/v1/garments/${item.id}`, { method: "DELETE" });
+              if (!response.ok) throw new Error("garment_delete_failed");
+              const nextWardrobe = cloudWardrobe.filter((entry) => String(entry.id) !== String(item.id));
+              setCloudWardrobe(nextWardrobe);
+              setTryOnLayers((current) => current.filter((layer) => String(layer.item.id) !== String(item.id)));
+              setSelectedItem(null);
+              if (item.localImageUri?.startsWith("file:")) {
+                await FileSystem.deleteAsync(item.localImageUri, { idempotent: true }).catch(() => undefined);
+              }
+              await persistWardrobeCache(cloudSession, nextWardrobe);
+              showNotice("Prenda eliminada", undefined, "success");
+            } catch {
+              showNotice("No se eliminó la prenda", "Comprueba tu conexión e inténtalo otra vez.", "error");
+            } finally {
+              setDeletingGarmentId(null);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const deleteOutfit = (outfit: Outfit) => {
+    if (!cloudSession || deletingOutfitId !== null) return;
+    Alert.alert(
+      `¿Eliminar ${outfit.name}?`,
+      "Se eliminará esta fotografía y su combinación guardada.",
+      [
+        { text: "Cancelar", style: "cancel" },
+        {
+          text: "Eliminar Look",
+          style: "destructive",
+          onPress: async () => {
+            setDeletingOutfitId(outfit.id);
+            try {
+              const response = await cloudFetch(cloudSession, `/api/v1/outfits/${outfit.id}`, { method: "DELETE" });
+              if (!response.ok) throw new Error("outfit_delete_failed");
+              const nextOutfits = outfits.filter((entry) => entry.id !== outfit.id);
+              setOutfits(nextOutfits);
+              setSelectedOutfit(null);
+              const localPath = outfit.localRenderUri || outfitCachePath(cloudSession, outfit.id);
+              if (localPath?.startsWith("file:")) {
+                await FileSystem.deleteAsync(localPath, { idempotent: true }).catch(() => undefined);
+              }
+              const indexPath = outfitIndexCachePath(cloudSession);
+              if (indexPath) await FileSystem.writeAsStringAsync(indexPath, JSON.stringify(nextOutfits));
+              showNotice("Look eliminado", undefined, "success");
+            } catch {
+              showNotice("No se eliminó el Look", "Comprueba tu conexión e inténtalo otra vez.", "error");
+            } finally {
+              setDeletingOutfitId(null);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const deleteAccount = () => {
+    if (!cloudSession || deletingAccount) return;
+    Alert.alert(
+      "¿Eliminar tu cuenta y todos tus datos?",
+      "Se borrarán definitivamente el avatar, las fotos, las prendas y los Looks de tu nube privada. Si tienes una suscripción de Apple, debes cancelarla por separado.",
+      [
+        { text: "Cancelar", style: "cancel" },
+        { text: "Administrar suscripción", onPress: () => Linking.openURL("https://apps.apple.com/account/subscriptions").catch(() => undefined) },
+        {
+          text: "Eliminar todo",
+          style: "destructive",
+          onPress: async () => {
+            const session = cloudSession;
+            setDeletingAccount(true);
+            try {
+              const response = await cloudFetch(session, "/api/v1/account", { method: "DELETE" });
+              if (!response.ok) throw new Error("account_delete_failed");
+              await Promise.all([
+                ...Object.values(cloudKeys).map((key) => SecureStore.deleteItemAsync(key).catch(() => undefined)),
+                clearPrivateLocalData(),
+              ]);
+              setCloudSession(null);
+              setCloudWardrobe([]);
+              setOutfits([]);
+              setCloudAvatar(null);
+              setLocalAvatarUri(null);
+              setPhotos([]);
+              setPendingImport(null);
+              setPendingTryOn(null);
+              setTryOnLayers([]);
+              setTryOnRenderedUri(null);
+              setTryOnRenderedSignature(null);
+              setTryOnSavedOutfitId(null);
+              setSelectedItem(null);
+              setSelectedOutfit(null);
+              setAvatarOpen(false);
+              setReviewEmail("");
+              setReviewPassword("");
+              automaticCloudConnectionStarted.current = false;
+              pendingAnalysisOffered.current = false;
+              setProfileOpen(true);
+              showNotice("Cuenta eliminada", "Tus datos privados ya no están en Outfit Club.", "success");
+            } catch {
+              showNotice("No pudimos eliminar la cuenta", "No se borró parcialmente: inténtalo otra vez con conexión.", "error");
+            } finally {
+              setDeletingAccount(false);
+            }
           },
         },
       ],
@@ -1667,10 +1647,8 @@ export default function App() {
       setView("builder");
 
       if (!localAvatarUri && !cloudAvatar) {
-        Alert.alert("Prenda guardada", "Ya está en tu armario. Crea tu avatar para verla puesta.", [
-          { text: "Después", style: "cancel" },
-          { text: "Crear avatar", onPress: () => setAvatarOpen(true) },
-        ]);
+        showNotice("Prenda guardada", "Crea tu avatar para verla puesta.", "success");
+        setAvatarOpen(true);
       } else {
         showNotice("Prenda añadida al outfit", "Combínala y toca “Probar outfit” cuando esté listo.", "success");
       }
@@ -1680,39 +1658,6 @@ export default function App() {
     } finally {
       setProductImporting(false);
     }
-  };
-
-  const connectCodexExperiment = async () => {
-    if (codexConnecting) return;
-    setCodexConnecting(true);
-    try {
-      const pending = await beginDeviceAuthorization();
-      await Clipboard.setStringAsync(pending.userCode);
-      const shouldContinue = await new Promise<boolean>((resolve) => Alert.alert(
-        "Código de OpenAI copiado",
-        `${pending.userCode}\n\nPulsa “Abrir OpenAI”, pega el código y autoriza esta prueba. Después vuelve a Outfit Club.`,
-        [
-          { text: "Cancelar", style: "cancel", onPress: () => resolve(false) },
-          { text: "Abrir OpenAI", onPress: () => resolve(true) },
-        ],
-        { cancelable: false },
-      ));
-      if (!shouldContinue) return;
-      await Linking.openURL(CODEX_DEVICE_URL);
-      await completeDeviceAuthorization(pending);
-      setCodexConnected(true);
-      showNotice("Conexión lista", "Ya puedes crear tu avatar y tus Looks.", "success");
-    } catch {
-      showNotice("No se completó la conexión", "Puedes volver a intentarlo.", "error");
-    } finally {
-      setCodexConnecting(false);
-    }
-  };
-
-  const disconnectCodexExperiment = async () => {
-    await logoutCodex();
-    setCodexConnected(false);
-    showNotice("Cuenta desconectada", "La sesión se eliminó de este iPhone.", "success");
   };
 
   const uploadBatch = async (queueOverride?: PendingImportQueue) => {
@@ -1830,13 +1775,7 @@ export default function App() {
       setImportOpen(false);
       setImportStage("analyzing");
       setImportMessage("Buscando prendas claras y evitando duplicados…");
-      const experimentalPhotos: ExperimentalPhoto[] = queue.photos.map((photo) => ({
-        id: photo.uploadId!,
-        asset: photo.asset,
-      }));
-      const completed = codexConnected
-        ? await startExperimentalProcessing(queue.batchId!, experimentalPhotos)
-        : await startProcessing(queue.batchId!, "economy");
+      const completed = await startProcessing(queue.batchId!, "economy");
       if (completed) {
         await clearImportQueue(queue);
         setPendingImport(null);
@@ -1863,96 +1802,6 @@ export default function App() {
     }
   };
 
-  const startExperimentalProcessing = async (batchId: string, selectedPhotos: ExperimentalPhoto[]) => {
-    if (!cloudSession || processing) return false;
-    setProcessing(true);
-    setImportStage("analyzing");
-    setImportMessage("Detectando únicamente prendas visibles con claridad…");
-    setExperimentalProgress(0);
-    try {
-      const persistedByCandidate = new Map<string, { id: string; candidateKey: string }>();
-      let detectedGarmentCount = 0;
-      const analysis = await analyzeExperimentalInventory(selectedPhotos, async (completed, total, chunkResult, chunkUsage) => {
-        setExperimentalProgress(Math.round((completed / total) * 70));
-        const response = await cloudFetch(cloudSession, `/api/v1/batches/${batchId}/experimental-inventory`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            provider: "chatgpt-codex-experimental",
-            model: EXPERIMENTAL_CODEX_MODEL,
-            consent: true,
-            results: [chunkResult],
-            usage: chunkUsage,
-            incremental: true,
-            final: completed === total,
-            chunkIndex: completed,
-            chunkTotal: total,
-          }),
-        });
-        const partial = await response.json() as {
-          error?: string;
-          detail?: string;
-          garmentCount?: number;
-          garments?: Array<{ id: string; candidateKey: string }>;
-        };
-        if (!response.ok) throw new Error(partial.detail ? `${partial.error || "experimental_inventory_failed"}: ${partial.detail}` : partial.error || "experimental_inventory_failed");
-        detectedGarmentCount = partial.garmentCount ?? detectedGarmentCount;
-        for (const garment of partial.garments || []) persistedByCandidate.set(garment.candidateKey, garment);
-        await loadWardrobe(cloudSession);
-        setImportMessage(completed === total
-          ? `${detectedGarmentCount} prendas encontradas. Preparando sus imágenes…`
-          : `${detectedGarmentCount} prendas disponibles mientras revisamos las fotos restantes…`);
-      });
-      setExperimentalProgress(82);
-      const candidates = new Map(analysis.results.flatMap((item) => item.garments).map((item) => [item.candidate_key, item]));
-      const photosById = new Map(selectedPhotos.map((photo) => [photo.id, photo]));
-      const persistedGarments = Array.from(new Map(
-        Array.from(persistedByCandidate.values()).map((garment) => [garment.id, garment]),
-      ).values());
-      const eligible = persistedGarments.filter((item) => {
-        const candidate = candidates.get(item.candidateKey);
-        return candidate && candidate.visibility === "clear" && candidate.confidence >= 85 && !candidate.is_basic && candidate.evidence.length > 0;
-      });
-      const basicCount = persistedGarments.filter((item) => candidates.get(item.candidateKey)?.is_basic).length;
-      let generatedCount = 0;
-      for (let index = 0; index < eligible.length; index += 1) {
-        const persisted = eligible[index];
-        const candidate = candidates.get(persisted.candidateKey)!;
-        const evidence = candidate.evidence.reduce((best, item) => {
-          const area = item.bbox.width * item.bbox.height;
-          const bestArea = best.bbox.width * best.bbox.height;
-          return area > bestArea ? item : best;
-        });
-        const photo = photosById.get(evidence.photo_id);
-        if (!photo) continue;
-        try {
-          const image = await generateExperimentalGarmentImage(photo, candidate);
-          await uploadExperimentalGarmentImage(cloudSession, persisted.id, image);
-          generatedCount += 1;
-          await loadWardrobe(cloudSession);
-          setImportMessage(`${generatedCount} de ${eligible.length} prendas preparadas. Ya puedes revisar las disponibles.`);
-        } catch {
-          // The evidence image remains available when one catalog generation fails.
-        }
-        setExperimentalProgress(85 + Math.round(((index + 1) / Math.max(eligible.length, 1)) * 15));
-      }
-      setExperimentalProgress(100);
-      await loadWardrobe(cloudSession);
-      setImportStage("complete");
-      setImportMessage(`${detectedGarmentCount} prendas añadidas. ${basicCount ? `${basicCount} básicas se conservaron sin generar otra imagen.` : "Tu armario está listo."}`);
-      return true;
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : "unknown";
-      console.info("[Outfit Club inventory analysis]", detail);
-      setImportStage("error");
-      setImportMessage("El análisis se pausó. Tus fotos siguen seguras y puedes reanudarlo sin volver a elegirlas.");
-      return false;
-    } finally {
-      setExperimentalProgress(0);
-      setProcessing(false);
-    }
-  };
-
   const startProcessing = async (batchId: string, mode: "economy" | "quality") => {
     if (!cloudSession || processing) return false;
     setProcessing(true);
@@ -1971,9 +1820,12 @@ export default function App() {
         return false;
       }
       if (!response.ok) throw new Error(result.error || "processing_failed");
-      await loadWardrobe(cloudSession);
+      const items = await loadWardrobe(cloudSession) || [];
+      const queued = await queueAutomaticReconstructions(items);
       setImportStage("complete");
-      setImportMessage(`${result.garmentCount ?? 0} prendas añadidas a tu armario.`);
+      setImportMessage(queued > 0
+        ? `${result.garmentCount ?? 0} prendas añadidas. ${queued} imágenes se están preparando en segundo plano.`
+        : `${result.garmentCount ?? 0} prendas añadidas a tu armario.`);
       return true;
     } catch (error) {
       console.info("[Outfit Club inventory processing]", error instanceof Error ? error.message : "unknown");
@@ -1985,79 +1837,42 @@ export default function App() {
     }
   };
 
+  const queueAutomaticReconstructions = async (items: WardrobeItem[]) => {
+    if (!cloudSession) return 0;
+    const candidates = items.filter((item) => (
+      item.status === "candidate"
+      && !item.isBasic
+      && Boolean(item.evidencePath)
+      && item.sourceType !== "internet"
+    ));
+    let queued = 0;
+    await runPool(candidates, 3, async (item) => {
+      const response = await cloudFetch(cloudSession, `/api/v1/garments/${item.id}/reconstruct`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "draft",
+          consent: true,
+          acknowledgesOpenAIRetention: true,
+        }),
+      });
+      if (response.ok || response.status === 202) queued += 1;
+    });
+    if (queued > 0) {
+      const candidateIds = new Set(candidates.map((item) => String(item.id)));
+      setCloudWardrobe((current) => current.map((item) => candidateIds.has(String(item.id))
+        ? { ...item, status: "reconstructing" }
+        : item));
+    }
+    return queued;
+  };
+
   const chooseReconstruction = (item: WardrobeItem) => {
     if (item.isBasic) {
       showNotice("Básico reconocido", "Conservamos la foto real sin gastar una generación.");
       return;
     }
-    if (codexConnected && item.evidencePath) {
-      Alert.alert(
-        "Crear imagen de catálogo",
-        "Outfit Club aislará la prenda y quitará el fondo. La foto original seguirá guardada de forma privada para que puedas compararla.",
-        [
-          { text: "Ahora no", style: "cancel" },
-          { text: "Crear", onPress: () => startExperimentalReconstruction(item) },
-        ],
-      );
-      return;
-    }
-    const heldNote = item.status === "held" ? " La evidencia es débil; si continúas, el resultado quedará obligado a revisión." : "";
-    Alert.alert(
-      "Crear imagen transparente",
-      `Outfit Club preparará una sola prenda y comprobará el resultado contra tus fotos.${heldNote}`,
-      [
-        { text: "Ahora no", style: "cancel" },
-        { text: "Borrador económico", onPress: () => startReconstruction(item, "draft") },
-        { text: "Calidad final", onPress: () => startReconstruction(item, "final") },
-      ],
-    );
-  };
-
-  const startExperimentalReconstruction = async (item: WardrobeItem) => {
-    if (!cloudSession || !item.evidencePath || reconstructingId) return;
-    setReconstructingId(item.id);
-    try {
-      if (!FileSystem.cacheDirectory) throw new Error("image_cache_unavailable");
-      const localPath = `${FileSystem.cacheDirectory}vesta-evidence-${item.id}.jpg`;
-      const download = await FileSystem.downloadAsync(`${cloudSession.apiUrl}${item.evidencePath}`, localPath, {
-        headers: {
-          "OAI-Sites-Authorization": `Bearer ${cloudSession.dispatchToken}`,
-          "x-vesta-device-token": cloudSession.deviceToken,
-        },
-        sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
-      });
-      if (download.status < 200 || download.status >= 300) throw new Error(`evidence_download_${download.status}`);
-      try {
-        const image = await generateExperimentalGarmentImage(
-          { id: `evidence-${item.id}`, asset: { uri: download.uri, width: 1600, height: 1600, type: "image" } },
-          {
-            candidate_key: String(item.id),
-            name: item.name,
-            category: item.category,
-            type: item.type,
-            color: item.color,
-            material: item.material || "",
-            description: item.description || "",
-            confidence: item.confidence || 70,
-            is_basic: false,
-            visibility: "clear",
-            evidence: [{ photo_id: `evidence-${item.id}`, bbox: { x: 0, y: 0, width: 1000, height: 1000 } }],
-          },
-        );
-        await uploadExperimentalGarmentImage(cloudSession, String(item.id), image);
-      } finally {
-        await FileSystem.deleteAsync(localPath, { idempotent: true }).catch(() => undefined);
-      }
-      const items = await loadWardrobe(cloudSession);
-      const updated = items?.find((candidate) => candidate.id === item.id);
-      if (updated) setSelectedItem(updated);
-      showNotice("Imagen lista", "El recorte transparente ya está en tu armario.", "success");
-    } catch (error) {
-      console.info("[Outfit Club garment image]", error instanceof Error ? error.message : "unknown");
-      showNotice("No se creó la imagen", "La foto original sigue intacta. Puedes reintentarlo.", "error");
-    } finally {
-      setReconstructingId(null);
-    }
+    startReconstruction(item, "draft").catch(() => undefined);
   };
 
   const startReconstruction = async (item: WardrobeItem, mode: "draft" | "final") => {
@@ -2074,20 +1889,16 @@ export default function App() {
           forceHeld: item.status === "held",
         }),
       });
-      const result = await response.json() as { error?: string; status?: string; qaStatus?: string };
+      const result = await response.json() as { error?: string; status?: string; jobId?: string };
       if (response.status === 503 && result.error === "processing_not_configured") {
         showNotice("Imagen pendiente", "El procesamiento no está disponible todavía. No se realizó ningún cargo.", "error");
         return;
       }
       if (!response.ok) throw new Error(result.error || "reconstruction_failed");
-      const items = await loadWardrobe(cloudSession);
-      const refreshed = items?.find((entry) => entry.id === item.id);
-      if (refreshed) setSelectedItem(refreshed);
-      if (result.status === "approved") {
-        showNotice("Imagen verificada", "La prenda ya está lista para usar.", "success");
-      } else {
-        showNotice("Necesita revisión", "Conservamos la foto original para que puedas comparar el resultado.");
-      }
+      const pending = { ...item, status: "reconstructing" };
+      setCloudWardrobe((current) => current.map((entry) => String(entry.id) === String(item.id) ? pending : entry));
+      setSelectedItem(pending);
+      showNotice("Preparando la prenda", "Puedes cerrar la app; aparecerá lista en tu armario.", "success");
     } catch {
       showNotice("No se creó la imagen", "La prenda y sus fotos siguen intactas. Puedes reintentar.", "error");
     } finally {
@@ -2109,52 +1920,16 @@ export default function App() {
     return payload.selectedOutfitId;
   };
 
-  const reserveLookGeneration = async (idempotencyKey: string) => {
-    if (!cloudSession) throw new Error("outfit_cloud_unavailable");
-    const response = await cloudFetch(cloudSession, "/api/v1/subscription/usage", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "reserve", kind: "look_generation", amount: 1, idempotencyKey }),
-    });
-    const payload = await response.json() as { reservationId?: string; metered?: boolean; error?: string };
-    if (!response.ok) {
-      if (response.status === 402 || response.status === 429) setPaywallOpen(true);
-      throw new Error(payload.error || `look_usage_${response.status}`);
-    }
-    return payload.reservationId || null;
-  };
-
-  const releaseUsageReservation = async (reservationId: string) => {
-    if (!cloudSession) return;
-    await cloudFetch(cloudSession, "/api/v1/subscription/usage", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "release", reservationId }),
-    });
-  };
-
-  const saveTryOnRender = async (outfitId: string, imageBase64: string, usageReservationId?: string) => {
-    if (!cloudSession) throw new Error("outfit_cloud_unavailable");
-    await uploadOutfitRender(cloudSession, outfitId, imageBase64, usageReservationId || null);
-    const localLookPath = outfitCachePath(cloudSession, outfitId);
-    if (localLookPath) {
-      await FileSystem.writeAsStringAsync(localLookPath, imageBase64, { encoding: FileSystem.EncodingType.Base64 }).catch(() => undefined);
-    }
-    await loadOutfits(cloudSession);
-  };
-
   const renderRealTryOn = async (
     layers: TryOnLayer[],
-    previousLayers: TryOnLayer[],
+    _previousLayers: TryOnLayer[],
     quality: TryOnRenderQuality = "low",
     queuedJob?: PendingTryOnQueue,
   ) => {
-    if (!cloudSession || !FileSystem.cacheDirectory || !FileSystem.documentDirectory) return;
-    const startedAt = Date.now();
+    if (!cloudSession || !FileSystem.documentDirectory) return;
     tryOnResumeStarted.current = true;
     setTryOnRenderingQuality(quality);
     setTryOnRendering(true);
-    const temporaryPaths: string[] = [];
     try {
       let queue: PendingTryOnQueue = queuedJob || {
         version: 1,
@@ -2173,142 +1948,39 @@ export default function App() {
         await persistTryOnQueue(queue);
         setPendingTryOn(queue);
       }
-
-      if (!queue.usageReservationId) {
-        const usageReservationId = await reserveLookGeneration(`try-on:${queue.id}`);
-        queue = { ...queue, usageReservationId: usageReservationId || undefined, updatedAt: new Date().toISOString() };
-        await persistTryOnQueue(queue);
-        setPendingTryOn(queue);
-      }
-
-      let generatedImageBase64: string | null = null;
-      if (queue.renderFileUri) {
-        const rendered = await FileSystem.getInfoAsync(queue.renderFileUri).catch(() => null);
-        if (rendered?.exists) {
-          generatedImageBase64 = await FileSystem.readAsStringAsync(queue.renderFileUri, { encoding: FileSystem.EncodingType.Base64 });
-          setTryOnRenderedUri(queue.renderFileUri);
-          setTryOnRenderedSignature(tryOnSignatureFor(layers));
-          setTryOnResultQuality(quality);
-        }
-      }
-
-      if (generatedImageBase64) {
-        await saveTryOnRender(outfitId, generatedImageBase64, queue.usageReservationId);
-        setTryOnSavedOutfitId(outfitId);
-        await clearTryOnQueue();
-        setPendingTryOn(null);
-        tryOnResumeStarted.current = false;
-        showNotice("Look terminado", "La foto pendiente ya quedó guardada en Looks.", "success");
-        return;
-      }
-
-      const avatarPreparationStartedAt = Date.now();
-      const avatarBase64 = await accountAvatarBase64();
-      const avatarPreparationMs = Date.now() - avatarPreparationStartedAt;
-      const garmentPreparationStartedAt = Date.now();
-      let garmentCacheHits = 0;
-      let garmentCacheMisses = 0;
-      const garmentInputs = [];
-      for (const layer of layers) {
-        const cacheKey = `${layer.item.id}:${layer.item.imagePath}`;
-        let imageBase64 = tryOnGarmentBase64.current.get(cacheKey);
-        if (imageBase64) {
-          garmentCacheHits += 1;
-        } else {
-          garmentCacheMisses += 1;
-          const localPath = `${FileSystem.cacheDirectory}${TRY_ON_RENDER_PREFIX}-${layer.item.id}.png`;
-          await FileSystem.deleteAsync(localPath, { idempotent: true }).catch(() => undefined);
-          const download = await FileSystem.downloadAsync(`${cloudSession.apiUrl}${layer.item.imagePath}`, localPath, {
-            headers: {
-              "OAI-Sites-Authorization": `Bearer ${cloudSession.dispatchToken}`,
-              "x-vesta-device-token": cloudSession.deviceToken,
-            },
-            sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
-          });
-          if (download.status < 200 || download.status >= 300) throw new Error(`try_on_garment_download_${download.status}`);
-          temporaryPaths.push(download.uri);
-          imageBase64 = await prepareTryOnGarmentReference(download.uri);
-          if (tryOnGarmentBase64.current.size >= 12) {
-            const oldestKey = tryOnGarmentBase64.current.keys().next().value;
-            if (oldestKey) tryOnGarmentBase64.current.delete(oldestKey);
-          }
-          tryOnGarmentBase64.current.set(cacheKey, imageBase64);
-        }
-        garmentInputs.push({
-          name: layer.item.name,
-          type: layer.item.type,
-          color: layer.item.color,
-          description: layer.item.description,
-          placement: imagePlacementFor(layer.item),
-          imageBase64,
-        });
-      }
-      const garmentPreparationMs = Date.now() - garmentPreparationStartedAt;
-      const generated = await generateExperimentalTryOnImage(avatarBase64, garmentInputs, quality);
-      const outputPath = `${FileSystem.documentDirectory}${TRY_ON_RENDER_PREFIX}-${Date.now()}.png`;
-      const localSaveStartedAt = Date.now();
-      await FileSystem.writeAsStringAsync(outputPath, generated.imageBase64, { encoding: FileSystem.EncodingType.Base64 });
-      const localSaveMs = Date.now() - localSaveStartedAt;
+      const result = await requestCloudOutfitRender(outfitId, quality, queue.id, quality === "medium");
       const previousRender = tryOnRenderedUri;
-      setTryOnRenderedUri(outputPath);
+      setTryOnRenderedUri(result.localRenderUri);
       setTryOnRenderedSignature(tryOnSignatureFor(layers));
       setTryOnResultQuality(quality);
-      queue = { ...queue, renderFileUri: outputPath, updatedAt: new Date().toISOString() };
-      await persistTryOnQueue(queue);
-      setPendingTryOn(queue);
-      if (previousRender?.startsWith("file:")) {
+      setTryOnSavedOutfitId(outfitId);
+      setOutfits((current) => current.map((entry) => entry.id === outfitId
+        ? { ...entry, renderPath: result.renderPath, localRenderUri: result.localRenderUri, status: "ready" }
+        : entry));
+      if (previousRender?.startsWith("file:") && previousRender !== result.localRenderUri) {
         await FileSystem.deleteAsync(previousRender, { idempotent: true }).catch(() => undefined);
       }
-      const cloudSaveStartedAt = Date.now();
-      let cloudUploadMs = 0;
-      try {
-        await saveTryOnRender(outfitId, generated.imageBase64, queue.usageReservationId);
-        setTryOnSavedOutfitId(outfitId);
-        cloudUploadMs = Date.now() - cloudSaveStartedAt;
-        await clearTryOnQueue();
-        setPendingTryOn(null);
-        tryOnResumeStarted.current = false;
-      } catch (error) {
-        cloudUploadMs = Date.now() - cloudSaveStartedAt;
-        setTryOnSavedOutfitId(null);
-        throw error;
-      }
-      await recordAvatarGenerationAudit({
-        recordedAt: new Date().toISOString(),
-        flow: "builder",
-        status: "completed",
-        quality,
-        garmentCount: garmentInputs.length,
-        garmentCacheHits,
-        garmentCacheMisses,
-        ...generated.metrics,
-        avatarPreparationMs,
-        garmentPreparationMs,
-        cloudUploadMs,
-        localSaveMs,
-        totalMs: Date.now() - startedAt,
-      });
+      await clearTryOnQueue();
+      setPendingTryOn(null);
+      tryOnResumeStarted.current = false;
+      await loadOutfits(cloudSession).catch(() => undefined);
+      showNotice("Look terminado", "La foto quedó guardada automáticamente en Looks.", "success");
     } catch (error) {
-      setTryOnLayers(previousLayers);
       const detail = error instanceof Error ? error.message : "unknown";
       if (detail === "avatar_required") {
-        Alert.alert("Crea tu avatar primero", "El probador necesita una selfie y una foto de cuerpo completo.", [
-          { text: "Después", style: "cancel" },
-          { text: "Crear avatar", onPress: () => setAvatarOpen(true) },
-        ]);
-      } else if (/codex_not_connected|token_refresh|401/u.test(detail)) {
-        setCodexConnected(false);
-        showNotice("Vuelve a conectar tu cuenta", "La sesión expiró. Reconéctala desde tu perfil.", "error");
+        showNotice("Crea tu avatar primero", "El probador necesita una selfie y una foto de cuerpo completo.");
+        setAvatarOpen(true);
       } else if (detail === "moderation_blocked") {
         await clearTryOnQueue();
         setPendingTryOn(null);
         showNotice("No se pudo crear esta prueba", "Tu avatar y tus prendas siguen intactos.", "error");
+      } else if (detail === "try_on_still_running") {
+        showNotice("El Look sigue creándose", "Puedes cerrar la app; aparecerá en Looks cuando termine.");
       } else {
         console.info("[Outfit Club try-on]", detail);
         showNotice("Creación pausada", "Tu outfit quedó guardado y continuará automáticamente cuando vuelvas a abrir la app.", "error");
       }
     } finally {
-      await Promise.all(temporaryPaths.map((path) => FileSystem.deleteAsync(path, { idempotent: true }).catch(() => undefined)));
       setTryOnRendering(false);
     }
   };
@@ -2320,7 +1992,7 @@ export default function App() {
       setPendingTryOn(null);
       return;
     }
-    if (!pendingTryOn.renderFileUri && (!codexConnected || (!localAvatarUri && !cloudAvatar))) return;
+    if (!localAvatarUri && !cloudAvatar) return;
     if (wardrobeLoading) return;
     const wardrobeById = new Map(cloudWardrobe.map((item) => [String(item.id), item]));
     const queuedLayers = pendingTryOn.garmentIds
@@ -2343,7 +2015,6 @@ export default function App() {
     pendingTryOn?.id,
     pendingTryOn?.updatedAt,
     cloudSession?.deviceId,
-    codexConnected,
     cloudAvatar?.version,
     localAvatarUri,
     cloudWardrobe,
@@ -2442,21 +2113,8 @@ export default function App() {
   const generateTryOnOutfit = () => {
     if (tryOnRendering || !tryOnLayers.length) return;
     if (!localAvatarUri && !cloudAvatar) {
-      Alert.alert("Crea tu avatar primero", "Después podrás usarlo con una o varias prendas sin volver a configurarlo.", [
-        { text: "Después", style: "cancel" },
-        { text: "Crear avatar", onPress: () => setAvatarOpen(true) },
-      ]);
-      return;
-    }
-    if (!codexConnected) {
-      Alert.alert(
-        "Conecta tu cuenta para probar el outfit",
-        "Puedes preparar combinaciones sin conexión. La conexión sólo se utiliza al crear la imagen vestida.",
-        [
-          { text: "Ahora no", style: "cancel" },
-          { text: "Conectar", onPress: connectCodexExperiment },
-        ],
-      );
+      showNotice("Crea tu avatar primero", "Después podrás usarlo con todas tus prendas sin volver a configurarlo.");
+      setAvatarOpen(true);
       return;
     }
     renderRealTryOn(tryOnLayers, tryOnLayers, "low").catch(() => undefined);
@@ -2464,10 +2122,6 @@ export default function App() {
 
   const improveTryOnQuality = () => {
     if (tryOnRendering || !tryOnLayers.length) return;
-    if (!codexConnected) {
-      connectCodexExperiment();
-      return;
-    }
     renderRealTryOn(tryOnLayers, tryOnLayers, "medium").catch(() => undefined);
   };
 
@@ -2519,7 +2173,7 @@ export default function App() {
           </Pressable>
             <View style={styles.cloudBadge}>
             <View style={cloudSession ? styles.greenDot : styles.rustDot} />
-            <Text style={[styles.cloudBadgeText, !cloudSession && styles.cloudBadgePending]}>{tryOnRendering ? "VISTIENDO AVATAR…" : processing ? experimentalProgress ? `ANALIZANDO ${experimentalProgress}%` : "ANALIZANDO…" : reconstructingId ? "PREPARANDO PRENDA…" : cloudSession ? "CUENTA PROTEGIDA" : "PREPARANDO CUENTA…"}</Text>
+            <Text style={[styles.cloudBadgeText, !cloudSession && styles.cloudBadgePending]}>{tryOnRendering ? "CREANDO LOOK…" : avatarGenerating ? "CREANDO AVATAR…" : processing ? "ANALIZANDO…" : reconstructingId ? "PREPARANDO PRENDA…" : cloudSession ? "CUENTA PROTEGIDA" : "PREPARANDO CUENTA…"}</Text>
           </View>
           <Pressable style={styles.avatar} onPress={() => setProfileOpen(true)} accessibilityLabel="Privacidad y perfil">
             {avatarDisplaySource
@@ -2564,12 +2218,12 @@ export default function App() {
                           : importStage === "uploading"
                             ? `Subiendo ${uploadProgress}%`
                             : importStage === "analyzing"
-                              ? experimentalProgress ? `Analizando ${experimentalProgress}%` : "Analizando tus fotos"
+                              ? "Analizando tus fotos"
                               : importStage === "complete" ? "Armario actualizado" : "Importación pausada"}</Text>
                       <Text style={styles.batchMeta}>{importMessage}</Text>
                       {(importStage === "uploading" || importStage === "analyzing") && (
                         <View style={styles.importProgressTrack}>
-                          <View style={[styles.importProgressFill, { width: `${importStage === "uploading" ? uploadProgress : Math.max(experimentalProgress, 8)}%` }]} />
+                          <View style={[styles.importProgressFill, { width: `${importStage === "uploading" ? uploadProgress : 42}%` }]} />
                         </View>
                       )}
                     </View>
@@ -2951,37 +2605,30 @@ export default function App() {
                   : <Text style={styles.profileAvatarText}>YO</Text>}
               </View>
               <Text style={[styles.eyebrow, styles.centerText]}>TU OUTFIT CLUB</Text>
-              <Text style={styles.modalTitle}>Tu nube privada.</Text>
-              <Text style={styles.modalIntro}>Cada cuenta tiene su propio avatar, armario y Looks. Las imágenes solo se entregan después de verificar el dispositivo.</Text>
-              <View style={styles.architectureCard}>
-                <View style={styles.architectureRow}><Text style={styles.architectureLabel}>AVATAR</Text><Text style={avatarDisplaySource ? styles.architectureValue : styles.architecturePending}>{avatarDisplaySource ? "Listo y privado" : "Pendiente"}</Text></View>
-                <View style={styles.architectureRow}><Text style={styles.architectureLabel}>ORIGINALES</Text><Text style={styles.architectureValue}>Privados</Text></View>
-                <View style={styles.architectureRow}><Text style={styles.architectureLabel}>PNG Y LOOKS</Text><Text style={styles.architectureValue}>Privados</Text></View>
-                <View style={styles.architectureRow}><Text style={styles.architectureLabel}>DUPLICADOS APARTADOS</Text><Text style={styles.architectureValue}>{duplicateCount}</Text></View>
-                <View style={styles.architectureRow}><Text style={styles.architectureLabel}>ACCESO</Text><Text style={styles.architectureValue}>Solo esta cuenta</Text></View>
-                <View style={styles.architectureRow}><Text style={styles.architectureLabel}>ESTADO</Text><Text style={cloudSession ? styles.architectureValue : styles.architecturePending}>{cloudSession ? "Protegida y sincronizada" : pairing ? "Preparando cuenta…" : "Configurando…"}</Text></View>
-                <View style={styles.architectureRow}><Text style={styles.architectureLabel}>CHATGPT · PRUEBA</Text><Text style={codexConnected ? styles.architectureValue : styles.architecturePending}>{codexConnected ? "Conectado" : codexConnecting ? "Esperando autorización…" : "Desconectado"}</Text></View>
-              </View>
-              <Text style={styles.profileFootnote}>{cloudSession ? `${cloudWardrobe.length ? `${cloudWardrobe.length} prendas reales sincronizadas. ` : ""}El avatar y los Looks pertenecen automáticamente a esta cuenta; las copias locales permiten volver a verlos en este iPhone.` : "Outfit Club está creando automáticamente el espacio privado de esta cuenta."}</Text>
-              <Pressable style={styles.premiumCard} onPress={() => { setProfileOpen(false); setPaywallOpen(true); }}>
+              <Text style={styles.modalTitle}>{cloudSession ? "Tu nube privada." : "Tu armario, siempre contigo."}</Text>
+              <Text style={styles.modalIntro}>{cloudSession
+                ? "Tu avatar, armario y Looks están sincronizados automáticamente y protegidos por tu cuenta."
+                : "Continúa una sola vez para crear tu espacio privado y sincronizarlo en este iPhone."}</Text>
+              {cloudSession && <Pressable style={styles.premiumCard} onPress={() => { setProfileOpen(false); setPaywallOpen(true); }}>
                 <View style={styles.premiumCardIcon}><Text style={styles.premiumCardIconText}>OC</Text></View>
                 <View style={styles.premiumCardCopy}>
                   <Text style={styles.premiumCardEyebrow}>OUTFIT CLUB PREMIUM</Text>
                   <Text style={styles.premiumCardTitle}>Ver planes y administrar pagos</Text>
                 </View>
                 <Text style={styles.premiumCardArrow}>›</Text>
-              </Pressable>
+              </Pressable>}
               <Pressable style={styles.secondaryButton} onPress={() => { setProfileOpen(false); setPrivacyOpen(true); }}>
                 <Text style={styles.secondaryButtonText}>Política de privacidad</Text>
               </Pressable>
               {!cloudSession && (
-                <Pressable style={[styles.fullButton, pairing && styles.disabledButton]} onPress={startCloudConnection} disabled={pairing}>
-                  <Text style={styles.fullButtonText}>{pairing ? "Esperando conexión…" : "Conectar mi cuenta"}</Text>
-                </Pressable>
-              )}
-              {!cloudSession && (
-                <Pressable style={styles.secondaryButton} onPress={() => { setProfileOpen(false); setReviewLoginOpen(true); }}>
-                  <Text style={styles.secondaryButtonText}>Acceso para Apple Review</Text>
+                <Pressable
+                  style={[styles.fullButton, pairing && styles.disabledButton]}
+                  onPress={startCloudConnection}
+                  onLongPress={() => { setProfileOpen(false); setReviewLoginOpen(true); }}
+                  delayLongPress={1200}
+                  disabled={pairing}
+                >
+                  <Text style={styles.fullButtonText}>{pairing ? "Abriendo acceso…" : "Continuar"}</Text>
                 </Pressable>
               )}
               {cloudSession && (
@@ -2989,10 +2636,11 @@ export default function App() {
                   <Text style={styles.fullButtonText}>{avatarDisplaySource ? "Administrar mi avatar" : "Crear mi avatar"}</Text>
                 </Pressable>
               )}
-              {cloudSession && <Pressable style={styles.secondaryButton} onPress={() => Promise.all([loadWardrobe(), loadOutfits(), loadAvatar()])} disabled={wardrobeLoading}><Text style={styles.secondaryButtonText}>{wardrobeLoading ? "Sincronizando…" : "Sincronizar mi cuenta"}</Text></Pressable>}
-              <Text style={styles.experimentalNote}>CONEXIÓN PRIVADA · Tu sesión sólo se utiliza cuando analizas fotos o generas imágenes y se protege en este iPhone.</Text>
-              {!codexConnected && <Pressable style={[styles.fullButton, styles.experimentalButton, codexConnecting && styles.disabledButton]} onPress={connectCodexExperiment} disabled={codexConnecting}><Text style={styles.fullButtonText}>{codexConnecting ? "Esperando autorización…" : "Continuar con ChatGPT · prueba"}</Text></Pressable>}
-              {codexConnected && <Pressable style={[styles.secondaryButton, styles.experimentalButton]} onPress={disconnectCodexExperiment}><Text style={styles.secondaryButtonText}>Cerrar sesión experimental</Text></Pressable>}
+              {cloudSession && (
+                <Pressable onPress={deleteAccount} disabled={deletingAccount}>
+                  <Text style={[styles.deleteText, deletingAccount && styles.disabledText]}>{deletingAccount ? "Eliminando cuenta y datos…" : "Eliminar cuenta y todos mis datos"}</Text>
+                </Pressable>
+              )}
             </ScrollView>
           </View>
         </View>
@@ -3023,24 +2671,8 @@ export default function App() {
             <Pressable style={styles.closeButton} onPress={() => setAvatarOpen(false)}><Text style={styles.closeText}>×</Text></Pressable>
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.avatarSheetContent}>
               <Text style={[styles.eyebrow, styles.centerText]}>IDENTIDAD PRIVADA</Text>
-              <Text style={styles.modalTitle}>{avatarDraftUri ? "¿Este avatar sí eres tú?" : avatarDisplaySource ? "Actualiza tu avatar." : "Crea tu avatar."}</Text>
-              <Text style={styles.modalIntro}>{avatarDraftUri
-                ? "Confirma únicamente si el rostro y las proporciones se parecen a ti. Después se convertirá en la base de todos tus outfits."
-                : "Elige una selfie clara y una foto de cuerpo completo. Outfit Club creará una base neutral reutilizable para el probador."}</Text>
-
-              {avatarDraftUri ? (
-                <>
-                  <View style={styles.avatarDraftFrame}><Image source={{ uri: avatarDraftUri }} resizeMode="contain" style={styles.avatarDraftImage} /></View>
-                  <View style={styles.privacyPill}><View style={styles.greenDot} /><Text style={styles.privacyPillText}>SOLO SE GUARDA AL CONFIRMAR</Text></View>
-                  <Pressable style={[styles.fullButton, styles.avatarConfirmButton, avatarSaving && styles.disabledButton]} onPress={saveAvatarDraft} disabled={avatarSaving}>
-                    <Text style={styles.fullButtonText}>{avatarSaving ? "Guardando en tu nube…" : "Sí, este soy yo · Guardar"}</Text>
-                  </Pressable>
-                  <Pressable style={styles.secondaryButton} onPress={discardAvatarDraft} disabled={avatarSaving}>
-                    <Text style={styles.secondaryButtonText}>No se parece · Cambiar referencias</Text>
-                  </Pressable>
-                </>
-              ) : (
-                <>
+              <Text style={styles.modalTitle}>{avatarDisplaySource ? "Actualiza tu avatar." : "Crea tu avatar."}</Text>
+              <Text style={styles.modalIntro}>Elige una selfie clara y una foto de cuerpo completo. Outfit Club creará una base neutral reutilizable para el probador.</Text>
                   {avatarDisplaySource && (
                     <View style={styles.currentAvatarCard}>
                       <Image source={avatarDisplaySource} resizeMode="contain" style={styles.currentAvatarImage} />
@@ -3066,19 +2698,17 @@ export default function App() {
                   </View>
                   <Pressable style={styles.avatarConsentRow} onPress={() => setAvatarConsent((value) => !value)}>
                     <View style={[styles.avatarConsentBox, avatarConsent && styles.avatarConsentBoxActive]}><Text style={styles.avatarConsentCheck}>{avatarConsent ? "✓" : ""}</Text></View>
-                    <Text style={styles.avatarConsentText}>Soy la persona de ambas fotos o tengo su permiso. Entiendo que se enviarán a ChatGPT para crear el avatar; Outfit Club no las guardará en su nube.</Text>
+                    <Text style={styles.avatarConsentText}>Soy la persona de ambas fotos o tengo su permiso. Se usarán una sola vez para crear mi avatar privado y no se guardarán como referencias.</Text>
                   </Pressable>
                   <Pressable
                     style={[styles.fullButton, styles.avatarConfirmButton, (!avatarSelfie || !avatarFullBody || !avatarConsent || avatarGenerating) && styles.disabledButton]}
                     onPress={generateAvatarDraft}
                     disabled={!avatarSelfie || !avatarFullBody || !avatarConsent || avatarGenerating}
                   >
-                    {avatarGenerating ? <ActivityIndicator color={paper} /> : <Text style={styles.fullButtonText}>✦ Crear vista previa</Text>}
+                    {avatarGenerating ? <ActivityIndicator color={paper} /> : <Text style={styles.fullButtonText}>✦ Crear mi avatar</Text>}
                   </Pressable>
-                  <Text style={styles.avatarPrivacyCopy}>La vista previa usa calidad media una sola vez. Después cada outfit reutiliza el avatar confirmado.</Text>
+                  <Text style={styles.avatarPrivacyCopy}>Se crea una sola base reutilizable. Después cada outfit usa ese avatar sin pedirte las fotos otra vez.</Text>
                   {avatarDisplaySource && <Pressable onPress={deleteAccountAvatar}><Text style={styles.deleteText}>Eliminar avatar actual</Text></Pressable>}
-                </>
-              )}
             </ScrollView>
           </View>
         </View>
@@ -3108,6 +2738,9 @@ export default function App() {
                 )}
                 <Pressable style={styles.fullButton} onPress={() => addToTryOn(selectedItem)}>
                   <Text style={styles.fullButtonText}>{tryOnLayers.some((layer) => layer.item.id === selectedItem.id) ? "✓ En el probador" : "＋ Probar en mi avatar"}</Text>
+                </Pressable>
+                <Pressable onPress={() => deleteGarment(selectedItem)} disabled={deletingGarmentId !== null}>
+                  <Text style={[styles.deleteText, deletingGarmentId !== null && styles.disabledText]}>{deletingGarmentId === selectedItem.id ? "Eliminando prenda…" : "Eliminar de mi armario"}</Text>
                 </Pressable>
               </View>
             )}
@@ -3142,6 +2775,9 @@ export default function App() {
                   )}
                   <Pressable style={styles.fullButton} onPress={() => trySavedOutfit(selectedOutfit)}>
                     <Text style={styles.fullButtonText}>Editar este outfit en el probador</Text>
+                  </Pressable>
+                  <Pressable onPress={() => deleteOutfit(selectedOutfit)} disabled={deletingOutfitId !== null}>
+                    <Text style={[styles.deleteText, deletingOutfitId !== null && styles.disabledText]}>{deletingOutfitId === selectedOutfit.id ? "Eliminando Look…" : "Eliminar este Look"}</Text>
                   </Pressable>
                 </View>
               )}
@@ -3394,12 +3030,6 @@ const styles = StyleSheet.create({
   profileAvatarImage: { width: 64, height: 64, borderRadius: 32 },
   profileAvatarText: { color: paper, fontSize: 16, fontWeight: "800" },
   avatarProfileButton: { marginTop: 18, backgroundColor: rust },
-  architectureCard: { marginTop: 10, borderTopWidth: 1, borderTopColor: line },
-  architectureRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: line },
-  architectureLabel: { color: muted, fontSize: 8, fontWeight: "700", letterSpacing: 0.7 },
-  architectureValue: { color: "#60705B", fontSize: 10, fontWeight: "700" },
-  architecturePending: { color: rust, fontSize: 10, fontWeight: "700" },
-  profileFootnote: { color: muted, textAlign: "center", fontSize: 9, lineHeight: 14, marginTop: 18 },
   premiumCard: { flexDirection: "row", alignItems: "center", gap: 11, marginTop: 18, padding: 13, borderWidth: 1, borderColor: "#D5B8AA", borderRadius: 15, backgroundColor: "#F5E9E2" },
   premiumCardIcon: { width: 38, height: 38, alignItems: "center", justifyContent: "center", borderRadius: 19, backgroundColor: ink },
   premiumCardIconText: { color: paper, fontSize: 8, fontWeight: "900", letterSpacing: .5 },
@@ -3407,10 +3037,6 @@ const styles = StyleSheet.create({
   premiumCardEyebrow: { color: rust, fontSize: 6, fontWeight: "900", letterSpacing: .9 },
   premiumCardTitle: { color: ink, fontSize: 10, fontWeight: "800", marginTop: 4 },
   premiumCardArrow: { color: rust, fontSize: 25, fontWeight: "300" },
-  experimentalNote: { color: rust, textAlign: "center", fontSize: 7, lineHeight: 12, fontWeight: "800", letterSpacing: 0.45, marginTop: 18, marginBottom: 10 },
-  experimentalButton: { marginTop: 0 },
-  avatarDraftFrame: { width: "100%", aspectRatio: 0.72, marginTop: 9, marginBottom: 14, overflow: "hidden", borderRadius: 20, borderWidth: 1, borderColor: line, backgroundColor: "#E9E2D5" },
-  avatarDraftImage: { width: "100%", height: "100%" },
   avatarConfirmButton: { marginTop: 16, backgroundColor: rust },
   currentAvatarCard: { flexDirection: "row", alignItems: "center", gap: 14, marginTop: 6, marginBottom: 18, padding: 10, borderWidth: 1, borderColor: line, borderRadius: 15, backgroundColor: "#F8F5ED" },
   currentAvatarImage: { width: 70, height: 94, borderRadius: 10, backgroundColor: "#E9E2D5" },
@@ -3478,64 +3104,6 @@ function authorizedImageSource(session: CloudSession, path: string) {
   };
 }
 
-async function uploadExperimentalGarmentImage(session: CloudSession, garmentId: string, base64: string) {
-  if (!FileSystem.cacheDirectory) throw new Error("image_cache_unavailable");
-  const localPath = `${FileSystem.cacheDirectory}vesta-generated-${garmentId}.png`;
-  await FileSystem.writeAsStringAsync(localPath, base64, { encoding: FileSystem.EncodingType.Base64 });
-  try {
-    const response = await FileSystem.uploadAsync(
-      `${session.apiUrl}/api/v1/garments/${garmentId}/experimental-image`,
-      localPath,
-      {
-        httpMethod: "PUT",
-        uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
-        sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
-        headers: {
-          "Content-Type": "image/png",
-          "OAI-Sites-Authorization": `Bearer ${session.dispatchToken}`,
-          "x-vesta-device-token": session.deviceToken,
-        },
-      },
-    );
-    if (response.status < 200 || response.status >= 300) {
-      throw uploadResultError("generated_image", response.status, response.body);
-    }
-  } finally {
-    await FileSystem.deleteAsync(localPath, { idempotent: true }).catch(() => undefined);
-  }
-}
-
-async function uploadOutfitRender(session: CloudSession, outfitId: string, base64: string, usageReservationId: string | null = null) {
-  if (!FileSystem.cacheDirectory) throw new Error("image_cache_unavailable");
-  const localPath = `${FileSystem.cacheDirectory}vesta-outfit-${outfitId}.png`;
-  await FileSystem.writeAsStringAsync(localPath, base64, { encoding: FileSystem.EncodingType.Base64 });
-  try {
-    const response = await FileSystem.uploadAsync(
-      `${session.apiUrl}/api/v1/outfits/${outfitId}/render`,
-      localPath,
-      {
-        httpMethod: "PUT",
-        uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
-        sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
-        headers: {
-          "Content-Type": "image/png",
-          "OAI-Sites-Authorization": `Bearer ${session.dispatchToken}`,
-          "x-vesta-device-token": session.deviceToken,
-          ...(usageReservationId ? { "x-vesta-usage-reservation": usageReservationId } : {}),
-        },
-      },
-    );
-    if (response.status < 200 || response.status >= 300) {
-      throw uploadResultError("outfit_render", response.status, response.body);
-    }
-    const payload = JSON.parse(response.body) as { renderPath?: string };
-    if (!payload.renderPath) throw new Error("outfit_render_path_missing");
-    return payload.renderPath;
-  } finally {
-    await FileSystem.deleteAsync(localPath, { idempotent: true }).catch(() => undefined);
-  }
-}
-
 async function uploadAccountAvatar(session: CloudSession, base64: string) {
   if (!FileSystem.cacheDirectory) throw new Error("image_cache_unavailable");
   const localPath = `${FileSystem.cacheDirectory}vesta-avatar-upload-${Date.now()}.png`;
@@ -3582,24 +3150,6 @@ function outfitCachePath(session: CloudSession, outfitId: string) {
 
 function outfitIndexCachePath(session: CloudSession) {
   return FileSystem.documentDirectory ? `${FileSystem.documentDirectory}vesta-${accountCachePrefix(session)}-looks.json` : null;
-}
-
-async function recordAvatarGenerationAudit(audit: AvatarGenerationAudit) {
-  if (!FileSystem.documentDirectory) return;
-  const auditPath = `${FileSystem.documentDirectory}vesta-avatar-generation-audit.json`;
-  try {
-    const info = await FileSystem.getInfoAsync(auditPath).catch(() => null);
-    let history: AvatarGenerationAudit[] = [];
-    if (info?.exists) {
-      const parsed = JSON.parse(await FileSystem.readAsStringAsync(auditPath)) as AvatarGenerationAudit[];
-      if (Array.isArray(parsed)) history = parsed;
-    }
-    history.push(audit);
-    await FileSystem.writeAsStringAsync(auditPath, JSON.stringify(history.slice(-20), null, 2));
-    console.info("[Vesta avatar generation audit]", JSON.stringify(audit));
-  } catch {
-    // Private diagnostics must never interrupt the fitting experience.
-  }
 }
 
 function categoryForUi(category: string): Exclude<Category, "all"> {

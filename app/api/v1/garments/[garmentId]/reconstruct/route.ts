@@ -1,4 +1,5 @@
-import { and, eq } from "drizzle-orm";
+import { waitUntil } from "cloudflare:workers";
+import { and, desc, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { garments, processingJobs } from "@/db/schema";
 import { requireDevice } from "@/lib/device-auth";
@@ -11,14 +12,26 @@ export async function GET(request: Request, context: RouteContext) {
   const identity = await requireDevice(request);
   if (identity instanceof Response) return identity;
   const { garmentId } = await context.params;
-  const [garment] = await getDb().select({ id: garments.id, status: garments.status }).from(garments).where(and(
+  const db = getDb();
+  const [garment] = await db.select({ id: garments.id, status: garments.status }).from(garments).where(and(
     eq(garments.id, garmentId),
     eq(garments.ownerId, identity.ownerId),
   )).limit(1);
   if (!garment) return Response.json({ error: "garment_not_found" }, { status: 404 });
+  const [job] = await db.select({
+    id: processingJobs.id,
+    status: processingJobs.status,
+    progress: processingJobs.progress,
+    errorCode: processingJobs.errorCode,
+  }).from(processingJobs).where(and(
+    eq(processingJobs.ownerId, identity.ownerId),
+    eq(processingJobs.garmentId, garmentId),
+    eq(processingJobs.kind, "reconstruct"),
+  )).orderBy(desc(processingJobs.createdAt)).limit(1);
   return Response.json({
     configured: Boolean(getOpenAIKey()),
     status: garment.status,
+    job: job || null,
     modes: [
       { id: "draft", label: "Borrador económico", model: "gpt-image-2", quality: "low" },
       { id: "final", label: "Recorte final", model: "gpt-image-2", quality: "high" },
@@ -53,7 +66,7 @@ export async function POST(request: Request, context: RouteContext) {
     eq(processingJobs.kind, "reconstruct"),
     eq(processingJobs.status, "running"),
   )).limit(1);
-  if (running) return Response.json({ error: "reconstruction_already_running" }, { status: 409 });
+  if (running) return Response.json({ ok: true, status: "reconstructing", jobId: running.id }, { status: 202 });
 
   const jobId = `job_${crypto.randomUUID()}`;
   const startedAt = new Date().toISOString();
@@ -80,8 +93,20 @@ export async function POST(request: Request, context: RouteContext) {
     }).where(eq(garments.id, garmentId)),
   ]);
 
+  waitUntil(runReconstructionJob(identity.ownerId, garmentId, jobId, mode, garment.status));
+  return Response.json({ ok: true, status: "reconstructing", jobId }, { status: 202 });
+}
+
+async function runReconstructionJob(
+  ownerId: string,
+  garmentId: string,
+  jobId: string,
+  mode: ReconstructionMode,
+  previousStatus: (typeof garments.$inferSelect)["status"],
+) {
+  const db = getDb();
   try {
-    const result = await reconstructAndVerify(identity.ownerId, garmentId, mode);
+    const result = await reconstructAndVerify(ownerId, garmentId, mode);
     const completedAt = new Date().toISOString();
     await db.update(processingJobs).set({
       status: "completed",
@@ -90,16 +115,17 @@ export async function POST(request: Request, context: RouteContext) {
       completedAt,
       updatedAt: completedAt,
     }).where(eq(processingJobs.id, jobId));
-    return Response.json({ ok: true, ...result });
   } catch (error) {
     const failedAt = new Date().toISOString();
     const code = error instanceof ReconstructionError ? error.code : "reconstruction_failed";
     const message = error instanceof Error ? error.message.slice(0, 1000) : "Reconstruction failed.";
     await db.batch([
       db.update(processingJobs).set({ status: "failed", errorCode: code, errorMessage: message, updatedAt: failedAt }).where(eq(processingJobs.id, jobId)),
-      db.update(garments).set({ status: garment.status, updatedAt: failedAt }).where(eq(garments.id, garmentId)),
+      db.update(garments).set({ status: previousStatus, updatedAt: failedAt }).where(and(
+        eq(garments.id, garmentId),
+        eq(garments.ownerId, ownerId),
+      )),
     ]);
-    return Response.json({ error: code }, { status: 502 });
   }
 }
 

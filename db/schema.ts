@@ -167,6 +167,37 @@ export const outfitItems = sqliteTable("outfit_items", {
   position: integer("position").notNull(),
 }, (table) => [primaryKey({ columns: [table.outfitId, table.garmentId] })]);
 
+export const outfitRenderJobs = sqliteTable("outfit_render_jobs", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  outfitId: text("outfit_id").notNull().references(() => outfits.id, { onDelete: "cascade" }),
+  quality: text("quality", { enum: ["low", "medium"] }).notNull().default("low"),
+  status: text("status", { enum: ["queued", "running", "completed", "failed"] }).notNull().default("queued"),
+  errorCode: text("error_code"),
+  resultPath: text("result_path"),
+  createdAt: timestamp(),
+  updatedAt: timestamp(),
+  startedAt: text("started_at"),
+  completedAt: text("completed_at"),
+}, (table) => [
+  index("outfit_render_jobs_owner_outfit_idx").on(table.ownerId, table.outfitId, table.createdAt),
+  index("outfit_render_jobs_status_idx").on(table.status, table.updatedAt),
+]);
+
+export const avatarGenerationJobs = sqliteTable("avatar_generation_jobs", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  status: text("status", { enum: ["running", "completed", "failed"] }).notNull().default("running"),
+  errorCode: text("error_code"),
+  avatarVersion: text("avatar_version"),
+  createdAt: timestamp(),
+  updatedAt: timestamp(),
+  completedAt: text("completed_at"),
+}, (table) => [
+  index("avatar_generation_jobs_owner_created_idx").on(table.ownerId, table.createdAt),
+  index("avatar_generation_jobs_status_idx").on(table.status, table.updatedAt),
+]);
+
 export const subscriptionEntitlements = sqliteTable("subscription_entitlements", {
   ownerId: text("owner_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
   productId: text("product_id").notNull(),

@@ -1,7 +1,7 @@
 import { and, eq, ne, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { subscriptionEntitlements, subscriptionUsage } from "@/db/schema";
-import { subscriptionProductIds, weeklyAllowances } from "@/lib/subscription-plans";
+import { allowancesForProduct } from "@/lib/subscription-plans";
 
 export type MeteredUsageKind = "wardrobe_addition" | "look_generation";
 
@@ -12,7 +12,8 @@ export async function requireUsageCapacity(ownerId: string, kind: MeteredUsageKi
   if (!entitlement || entitlement.status !== "active" || entitlement.expiresAt <= new Date().toISOString()) {
     throw new SubscriptionUsageError("subscription_required", 402);
   }
-  if (entitlement.productId !== subscriptionProductIds.weekly) return entitlement;
+  const allowances = allowancesForProduct(entitlement.productId);
+  if (!allowances) throw new SubscriptionUsageError("subscription_plan_unavailable", 402);
   const [usage] = await db.select({ value: sql<number>`coalesce(sum(${subscriptionUsage.amount}), 0)` })
     .from(subscriptionUsage).where(and(
       eq(subscriptionUsage.ownerId, ownerId),
@@ -22,7 +23,7 @@ export async function requireUsageCapacity(ownerId: string, kind: MeteredUsageKi
       eq(subscriptionUsage.kind, kind),
       ne(subscriptionUsage.status, "released"),
     ));
-  const limit = kind === "wardrobe_addition" ? weeklyAllowances.wardrobeAddition : weeklyAllowances.lookGeneration;
+  const limit = kind === "wardrobe_addition" ? allowances.wardrobeAddition : allowances.lookGeneration;
   if (Number(usage?.value || 0) + amount > limit) throw new SubscriptionUsageError("weekly_limit_reached", 429, limit);
   return entitlement;
 }
@@ -34,7 +35,7 @@ export async function recordConsumedUsage(
   idempotencyKey: string,
   entitlement: Awaited<ReturnType<typeof requireUsageCapacity>>,
 ) {
-  if (entitlement.productId !== subscriptionProductIds.weekly || amount < 1) return;
+  if (amount < 1) return;
   const now = new Date().toISOString();
   await getDb().insert(subscriptionUsage).values({
     id: `usage_${crypto.randomUUID()}`,

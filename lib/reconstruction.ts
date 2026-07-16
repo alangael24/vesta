@@ -119,6 +119,11 @@ export async function reconstructAndVerify(ownerId: string, garmentId: string, m
   const bucket = getMediaBucket();
   const reconstructionKey = garmentReconstructionKey(ownerId, garmentId);
   const cutoutKey = garmentCutoutKey(ownerId, garmentId);
+  const [stillOwned] = await db.select({ id: garments.id }).from(garments).where(and(
+    eq(garments.id, garmentId),
+    eq(garments.ownerId, ownerId),
+  )).limit(1);
+  if (!stillOwned) throw new ReconstructionError("garment_deleted", "The garment was removed while reconstruction was running.");
   await Promise.all([
     bucket.put(reconstructionKey, opaquePng, {
       httpMetadata: { contentType: "image/png" },
@@ -131,6 +136,14 @@ export async function reconstructAndVerify(ownerId: string, garmentId: string, m
   ]);
 
   const qa = await runVisualQa(apiKey, garment, references, cutoutPng, stats, mode);
+  const [readyToPersist] = await db.select({ id: garments.id }).from(garments).where(and(
+    eq(garments.id, garmentId),
+    eq(garments.ownerId, ownerId),
+  )).limit(1);
+  if (!readyToPersist) {
+    await bucket.delete([reconstructionKey, cutoutKey]);
+    throw new ReconstructionError("garment_deleted", "The garment was removed while reconstruction was running.");
+  }
   const technicalPass = stats.transparentPixelRatio >= 12 && stats.transparentPixelRatio <= 92 && stats.foregroundPixelRatio >= 6;
   const visualPass = qa.verdict === "pass" && qa.identity_score >= 82 && qa.color_score >= 80 && qa.silhouette_score >= 80 && qa.hallucination_risk <= 18;
   const finalStatus = technicalPass && visualPass ? "approved" : qa.verdict === "fail" || !technicalPass ? "held" : "qa";

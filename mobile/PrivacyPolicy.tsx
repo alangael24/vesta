@@ -18,7 +18,7 @@ const sections = [
   },
   {
     title: "3. Fotos, avatar e inteligencia artificial",
-    body: "Outfit Club solo accede a las fotos que seleccionas. Cuando solicitas análisis o generación, las imágenes necesarias pueden enviarse a OpenAI después de mostrarte el aviso correspondiente. En el modo experimental con ChatGPT, los tokens se guardan en el Keychain del iPhone y no pasan por la nube de Outfit Club. OpenAI puede conservar registros de seguridad según sus propias políticas y la modalidad utilizada.",
+    body: "Outfit Club solo accede a las fotos que seleccionas. Cuando solicitas análisis, un avatar o un Look, enviamos a OpenAI únicamente las imágenes necesarias desde la infraestructura de Outfit Club. No pedimos ni guardamos credenciales personales de ChatGPT. Las referencias de selfie y cuerpo completo no se conservan después de crear el avatar. OpenAI puede conservar registros de seguridad según su política aplicable.",
   },
   {
     title: "4. Proveedores",
@@ -26,7 +26,7 @@ const sections = [
   },
   {
     title: "5. Conservación y eliminación",
-    body: "Conservamos el armario, avatar, prendas y Looks mientras mantengas tu cuenta o hasta que los elimines. Las copias locales permanecen en tu dispositivo. Puedes eliminar el avatar desde Perfil y borrar selecciones antes de subirlas. Para eliminar otros datos o solicitar la eliminación completa de la cuenta, utiliza el canal de soporte publicado en la ficha de Outfit Club en App Store.",
+    body: "Conservamos el armario, avatar, prendas y Looks mientras mantengas tu cuenta o hasta que los elimines. Puedes borrar prendas y Looks individualmente. Desde Perfil puedes eliminar el avatar o eliminar definitivamente la cuenta completa; esta última acción borra los datos de la nube y las copias privadas de la app en el dispositivo. Eliminar la cuenta no cancela automáticamente una suscripción administrada por Apple.",
   },
   {
     title: "6. Seguridad y transferencias",
@@ -34,7 +34,7 @@ const sections = [
   },
   {
     title: "7. Tus opciones y derechos",
-    body: "Puedes retirar permisos de Fotos desde Ajustes de iOS, desconectar ChatGPT, administrar tu suscripción con Apple y solicitar acceso, corrección o eliminación de tus datos mediante el canal de soporte. Retirar un permiso puede impedir que ciertas funciones operen.",
+    body: "Puedes retirar el permiso de Fotos desde Ajustes de iOS, administrar o cancelar tu suscripción con Apple, borrar contenidos individuales y eliminar tu cuenta desde Perfil. También puedes solicitar acceso o corrección mediante el canal de soporte. Retirar un permiso puede impedir que ciertas funciones operen.",
   },
   {
     title: "8. Menores y cambios",

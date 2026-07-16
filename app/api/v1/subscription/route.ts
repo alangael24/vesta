@@ -2,7 +2,7 @@ import { and, eq, ne, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { subscriptionEntitlements, subscriptionUsage } from "@/db/schema";
 import { verifyAppleSubscription } from "@/lib/apple-subscription";
-import { subscriptionProductIds, weeklyAllowances } from "@/lib/subscription-plans";
+import { allowancesForProduct } from "@/lib/subscription-plans";
 import { requireDevice } from "@/lib/device-auth";
 
 export async function GET(request: Request) {
@@ -69,15 +69,15 @@ async function entitlementStatus(ownerId: string) {
     eq(subscriptionUsage.periodStart, entitlement.purchasedAt),
     eq(subscriptionUsage.periodEnd, entitlement.expiresAt),
   ));
-  const weekly = entitlement.productId === subscriptionProductIds.weekly;
+  const allowances = allowancesForProduct(entitlement.productId);
   return {
     active,
     plan: entitlement.productId,
     periodStart: entitlement.purchasedAt,
     periodEnd: entitlement.expiresAt,
-    allowances: weekly ? {
-      wardrobeAdditions: weeklyAllowances.wardrobeAddition,
-      lookGenerations: weeklyAllowances.lookGeneration,
+    allowances: allowances ? {
+      wardrobeAdditions: allowances.wardrobeAddition,
+      lookGenerations: allowances.lookGeneration,
     } : null,
     usage: {
       wardrobeAdditions: Number(usage?.wardrobeAdditions || 0),

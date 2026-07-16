@@ -2,7 +2,7 @@ import { and, eq, ne, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { subscriptionEntitlements, subscriptionUsage } from "@/db/schema";
 import { requireDevice } from "@/lib/device-auth";
-import { subscriptionProductIds, weeklyAllowances } from "@/lib/subscription-plans";
+import { allowancesForProduct } from "@/lib/subscription-plans";
 
 type UsageKind = "wardrobe_addition" | "look_generation";
 type UsageAction = "reserve" | "consume" | "release";
@@ -34,9 +34,8 @@ export async function POST(request: Request) {
   if (!entitlement || entitlement.status !== "active" || entitlement.expiresAt <= new Date().toISOString()) {
     return failure("subscription_required", 402);
   }
-  if (entitlement.productId !== subscriptionProductIds.weekly) {
-    return Response.json({ ok: true, metered: false }, { headers: privateHeaders() });
-  }
+  const allowances = allowancesForProduct(entitlement.productId);
+  if (!allowances) return failure("subscription_plan_unavailable", 402);
   const [existing] = await db.select().from(subscriptionUsage).where(and(
     eq(subscriptionUsage.ownerId, identity.ownerId),
     eq(subscriptionUsage.idempotencyKey, body.idempotencyKey),
@@ -70,7 +69,7 @@ export async function POST(request: Request) {
       eq(subscriptionUsage.kind, body.kind as UsageKind),
       ne(subscriptionUsage.status, "released"),
     ));
-  const limit = body.kind === "wardrobe_addition" ? weeklyAllowances.wardrobeAddition : weeklyAllowances.lookGeneration;
+  const limit = body.kind === "wardrobe_addition" ? allowances.wardrobeAddition : allowances.lookGeneration;
   if (Number(total?.value || 0) > limit) {
     await db.update(subscriptionUsage).set({ status: "released", updatedAt: new Date().toISOString() })
       .where(eq(subscriptionUsage.id, reservationId));
