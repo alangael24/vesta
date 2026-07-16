@@ -181,6 +181,7 @@ type PendingTryOnQueue = {
   garmentIds: string[];
   quality: TryOnRenderQuality;
   outfitId?: string;
+  usageReservationId?: string;
   renderFileUri?: string;
   updatedAt: string;
 };
@@ -1265,7 +1266,9 @@ export default function App() {
     if (!cloudSession || !FileSystem.cacheDirectory) throw new Error("outfit_cloud_unavailable");
     const startedAt = Date.now();
     const temporaryPaths: string[] = [];
+    let usageReservationId: string | null = null;
     try {
+      usageReservationId = await reserveLookGeneration(`saved-look:${outfit.id}:${Date.now()}`);
       const avatarPreparationStartedAt = Date.now();
       const avatarBase64 = await accountAvatarBase64();
       const avatarPreparationMs = Date.now() - avatarPreparationStartedAt;
@@ -1311,7 +1314,8 @@ export default function App() {
       const garmentPreparationMs = Date.now() - garmentPreparationStartedAt;
       const generated = await generateExperimentalTryOnImage(avatarBase64, garmentInputs, "low");
       const cloudUploadStartedAt = Date.now();
-      const renderPath = await uploadOutfitRender(cloudSession, outfit.id, generated.imageBase64);
+      const renderPath = await uploadOutfitRender(cloudSession, outfit.id, generated.imageBase64, usageReservationId);
+      usageReservationId = null;
       const cloudUploadMs = Date.now() - cloudUploadStartedAt;
       const localRenderUri = outfitCachePath(cloudSession, outfit.id);
       const localSaveStartedAt = Date.now();
@@ -1335,6 +1339,9 @@ export default function App() {
         totalMs: Date.now() - startedAt,
       });
       return { renderPath, localRenderUri };
+    } catch (error) {
+      if (usageReservationId) await releaseUsageReservation(usageReservationId).catch(() => undefined);
+      throw error;
     } finally {
       await Promise.all(temporaryPaths.map((path) => FileSystem.deleteAsync(path, { idempotent: true }).catch(() => undefined)));
     }
@@ -2041,12 +2048,36 @@ export default function App() {
     return payload.selectedOutfitId;
   };
 
-  const saveTryOnRender = async (outfitId: string, imageBase64: string) => {
+  const reserveLookGeneration = async (idempotencyKey: string) => {
     if (!cloudSession) throw new Error("outfit_cloud_unavailable");
-    await uploadOutfitRender(cloudSession, outfitId, imageBase64);
+    const response = await cloudFetch(cloudSession, "/api/v1/subscription/usage", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "reserve", kind: "look_generation", amount: 1, idempotencyKey }),
+    });
+    const payload = await response.json() as { reservationId?: string; metered?: boolean; error?: string };
+    if (!response.ok) {
+      if (response.status === 402 || response.status === 429) setPaywallOpen(true);
+      throw new Error(payload.error || `look_usage_${response.status}`);
+    }
+    return payload.reservationId || null;
+  };
+
+  const releaseUsageReservation = async (reservationId: string) => {
+    if (!cloudSession) return;
+    await cloudFetch(cloudSession, "/api/v1/subscription/usage", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "release", reservationId }),
+    });
+  };
+
+  const saveTryOnRender = async (outfitId: string, imageBase64: string, usageReservationId?: string) => {
+    if (!cloudSession) throw new Error("outfit_cloud_unavailable");
+    await uploadOutfitRender(cloudSession, outfitId, imageBase64, usageReservationId || null);
     const localLookPath = outfitCachePath(cloudSession, outfitId);
     if (localLookPath) {
-      await FileSystem.writeAsStringAsync(localLookPath, imageBase64, { encoding: FileSystem.EncodingType.Base64 });
+      await FileSystem.writeAsStringAsync(localLookPath, imageBase64, { encoding: FileSystem.EncodingType.Base64 }).catch(() => undefined);
     }
     await loadOutfits(cloudSession);
   };
@@ -2082,6 +2113,13 @@ export default function App() {
         setPendingTryOn(queue);
       }
 
+      if (!queue.usageReservationId) {
+        const usageReservationId = await reserveLookGeneration(`try-on:${queue.id}`);
+        queue = { ...queue, usageReservationId: usageReservationId || undefined, updatedAt: new Date().toISOString() };
+        await persistTryOnQueue(queue);
+        setPendingTryOn(queue);
+      }
+
       let generatedImageBase64: string | null = null;
       if (queue.renderFileUri) {
         const rendered = await FileSystem.getInfoAsync(queue.renderFileUri).catch(() => null);
@@ -2094,7 +2132,7 @@ export default function App() {
       }
 
       if (generatedImageBase64) {
-        await saveTryOnRender(outfitId, generatedImageBase64);
+        await saveTryOnRender(outfitId, generatedImageBase64, queue.usageReservationId);
         setTryOnSavedOutfitId(outfitId);
         await clearTryOnQueue();
         setPendingTryOn(null);
@@ -2163,7 +2201,7 @@ export default function App() {
       const cloudSaveStartedAt = Date.now();
       let cloudUploadMs = 0;
       try {
-        await saveTryOnRender(outfitId, generated.imageBase64);
+        await saveTryOnRender(outfitId, generated.imageBase64, queue.usageReservationId);
         setTryOnSavedOutfitId(outfitId);
         cloudUploadMs = Date.now() - cloudSaveStartedAt;
         await clearTryOnQueue();
@@ -2883,7 +2921,7 @@ export default function App() {
         </View>
       </Modal>
 
-      <SubscriptionPaywall visible={paywallOpen} onClose={() => setPaywallOpen(false)} />
+      <SubscriptionPaywall visible={paywallOpen} onClose={() => setPaywallOpen(false)} cloud={cloudSession} />
       <PrivacyPolicyModal visible={privacyOpen} onClose={() => setPrivacyOpen(false)} />
 
       <Modal visible={avatarOpen} transparent animationType="slide" onRequestClose={() => setAvatarOpen(false)}>
@@ -3374,7 +3412,7 @@ async function uploadExperimentalGarmentImage(session: CloudSession, garmentId: 
   }
 }
 
-async function uploadOutfitRender(session: CloudSession, outfitId: string, base64: string) {
+async function uploadOutfitRender(session: CloudSession, outfitId: string, base64: string, usageReservationId: string | null = null) {
   if (!FileSystem.cacheDirectory) throw new Error("image_cache_unavailable");
   const localPath = `${FileSystem.cacheDirectory}vesta-outfit-${outfitId}.png`;
   await FileSystem.writeAsStringAsync(localPath, base64, { encoding: FileSystem.EncodingType.Base64 });
@@ -3390,6 +3428,7 @@ async function uploadOutfitRender(session: CloudSession, outfitId: string, base6
           "Content-Type": "image/png",
           "OAI-Sites-Authorization": `Bearer ${session.dispatchToken}`,
           "x-vesta-device-token": session.deviceToken,
+          ...(usageReservationId ? { "x-vesta-usage-reservation": usageReservationId } : {}),
         },
       },
     );

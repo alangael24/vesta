@@ -7,6 +7,7 @@ import {
   InventoryResult,
   persistExperimentalInventory,
 } from "@/lib/inventory";
+import { recordConsumedUsage, requireUsageCapacity, SubscriptionUsageError } from "@/lib/subscription-usage-server";
 
 type RouteContext = { params: Promise<{ batchId: string }> };
 type ExperimentalPayload = {
@@ -88,6 +89,17 @@ export async function POST(request: Request, context: RouteContext) {
   }
   if (job.status === "running" && !incremental) return Response.json({ error: "inventory_already_running" }, { status: 409 });
 
+  const proposedGarmentCount = payload.results.reduce((total, result) => total + result.garments.length, 0);
+  let entitlement;
+  try {
+    entitlement = await requireUsageCapacity(identity.ownerId, "wardrobe_addition", Math.max(1, proposedGarmentCount));
+  } catch (error) {
+    if (error instanceof SubscriptionUsageError) {
+      return Response.json({ error: error.code, limit: error.limit }, { status: error.status });
+    }
+    throw error;
+  }
+
   const now = new Date().toISOString();
   if (job.status !== "running") {
     await db.batch([
@@ -122,6 +134,13 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const persisted = await persistExperimentalInventory(identity.ownerId, batchId, photos, payload.results);
+    await recordConsumedUsage(
+      identity.ownerId,
+      "wardrobe_addition",
+      persisted.garmentCount,
+      `inventory:${batchId}:${incremental ? payload.chunkIndex : "all"}`,
+      entitlement,
+    );
     const inputTokens = (job.status === "running" ? job.inputTokens ?? 0 : 0) + payload.usage.inputTokens;
     const outputTokens = (job.status === "running" ? job.outputTokens ?? 0 : 0) + payload.usage.outputTokens;
     const [inventoryTotal] = await db.select({ value: count() }).from(garments).where(and(

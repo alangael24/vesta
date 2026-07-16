@@ -5,6 +5,7 @@ import { requireDevice } from "@/lib/device-auth";
 import { runDeduplication } from "@/lib/deduplication";
 import { InventoryError, runInventory } from "@/lib/inventory";
 import { getOpenAIKey } from "@/lib/openai";
+import { recordConsumedUsage, requireUsageCapacity, SubscriptionUsageError } from "@/lib/subscription-usage-server";
 
 type RouteContext = { params: Promise<{ batchId: string }> };
 type ProcessingMode = "economy" | "quality";
@@ -66,6 +67,15 @@ export async function POST(request: Request, context: RouteContext) {
   if (job.status === "completed") {
     return Response.json({ ok: true, status: "completed", garmentCount: parseGarmentCount(job.resultJson) });
   }
+  let entitlement;
+  try {
+    entitlement = await requireUsageCapacity(identity.ownerId, "wardrobe_addition", Math.min(50, Math.max(1, batch.photoCount)));
+  } catch (error) {
+    if (error instanceof SubscriptionUsageError) {
+      return Response.json({ error: error.code, limit: error.limit }, { status: error.status });
+    }
+    throw error;
+  }
 
   const now = new Date().toISOString();
   const model = mode === "quality" ? "gpt-5.6" : "gpt-5.6-luna";
@@ -82,6 +92,7 @@ export async function POST(request: Request, context: RouteContext) {
     ));
     if (photos.length !== batch.photoCount) throw new InventoryError("photos_incomplete", "Not all source photos are available.");
     const result = await runInventory(identity.ownerId, batchId, photos, mode);
+    await recordConsumedUsage(identity.ownerId, "wardrobe_addition", result.garmentCount, `inventory:${batchId}:server`, entitlement);
     const dedupJobId = `job_${batchId}_deduplicate`;
     const dedupStartedAt = new Date().toISOString();
     await db.insert(processingJobs).values({

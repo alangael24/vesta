@@ -166,3 +166,36 @@ export const outfitItems = sqliteTable("outfit_items", {
   garmentId: text("garment_id").notNull().references(() => garments.id, { onDelete: "cascade" }),
   position: integer("position").notNull(),
 }, (table) => [primaryKey({ columns: [table.outfitId, table.garmentId] })]);
+
+export const subscriptionEntitlements = sqliteTable("subscription_entitlements", {
+  ownerId: text("owner_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  productId: text("product_id").notNull(),
+  originalTransactionId: text("original_transaction_id").notNull(),
+  transactionId: text("transaction_id").notNull(),
+  environment: text("environment", { enum: ["Sandbox", "Production"] }).notNull(),
+  purchasedAt: text("purchased_at").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  status: text("status", { enum: ["active", "expired", "revoked"] }).notNull(),
+  verifiedAt: text("verified_at").notNull(),
+  updatedAt: timestamp(),
+}, (table) => [
+  uniqueIndex("subscription_entitlements_original_transaction_unique").on(table.originalTransactionId),
+  index("subscription_entitlements_status_expiry_idx").on(table.status, table.expiresAt),
+]);
+
+export const subscriptionUsage = sqliteTable("subscription_usage", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  originalTransactionId: text("original_transaction_id").notNull(),
+  kind: text("kind", { enum: ["wardrobe_addition", "look_generation"] }).notNull(),
+  amount: integer("amount").notNull().default(1),
+  idempotencyKey: text("idempotency_key").notNull(),
+  periodStart: text("period_start").notNull(),
+  periodEnd: text("period_end").notNull(),
+  status: text("status", { enum: ["reserved", "consumed", "released"] }).notNull().default("reserved"),
+  createdAt: timestamp(),
+  updatedAt: timestamp(),
+}, (table) => [
+  uniqueIndex("subscription_usage_owner_idempotency_unique").on(table.ownerId, table.idempotencyKey),
+  index("subscription_usage_owner_period_kind_idx").on(table.ownerId, table.periodStart, table.kind, table.status),
+]);

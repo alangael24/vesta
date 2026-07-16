@@ -1,8 +1,9 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
-import { garments, outfitItems, outfits, users } from "@/db/schema";
+import { garments, outfitItems, outfits, subscriptionEntitlements, subscriptionUsage, users } from "@/db/schema";
 import { requireDevice } from "@/lib/device-auth";
 import { snapshotGarment } from "@/lib/outfit-snapshot";
+import { subscriptionProductIds } from "@/lib/subscription-plans";
 import { getMediaBucket, outfitRenderKey } from "@/lib/storage";
 
 type RouteContext = { params: Promise<{ outfitId: string }> };
@@ -22,6 +23,25 @@ export async function PUT(request: Request, context: RouteContext) {
 
   const { outfitId } = await context.params;
   const db = getDb();
+  const [entitlement] = await db.select().from(subscriptionEntitlements)
+    .where(eq(subscriptionEntitlements.ownerId, identity.ownerId)).limit(1);
+  if (!entitlement || entitlement.status !== "active" || entitlement.expiresAt <= new Date().toISOString()) {
+    return Response.json({ error: "subscription_required" }, { status: 402 });
+  }
+  const reservationId = request.headers.get("x-vesta-usage-reservation");
+  if (entitlement.productId === subscriptionProductIds.weekly) {
+    if (!reservationId) return Response.json({ error: "look_usage_reservation_required" }, { status: 402 });
+    const [reservation] = await db.select({ id: subscriptionUsage.id }).from(subscriptionUsage).where(and(
+      eq(subscriptionUsage.id, reservationId),
+      eq(subscriptionUsage.ownerId, identity.ownerId),
+      eq(subscriptionUsage.originalTransactionId, entitlement.originalTransactionId),
+      eq(subscriptionUsage.kind, "look_generation"),
+      inArray(subscriptionUsage.status, ["reserved", "consumed"]),
+      eq(subscriptionUsage.periodStart, entitlement.purchasedAt),
+      eq(subscriptionUsage.periodEnd, entitlement.expiresAt),
+    )).limit(1);
+    if (!reservation) return Response.json({ error: "invalid_look_usage_reservation" }, { status: 409 });
+  }
   const [outfit] = await db.select({
     id: outfits.id,
     piecesSnapshotJson: outfits.piecesSnapshotJson,
@@ -65,6 +85,13 @@ export async function PUT(request: Request, context: RouteContext) {
     status: "ready",
     updatedAt: new Date().toISOString(),
   }).where(and(eq(outfits.id, outfitId), eq(outfits.ownerId, identity.ownerId)));
+  if (reservationId && entitlement.productId === subscriptionProductIds.weekly) {
+    await db.update(subscriptionUsage).set({ status: "consumed", updatedAt: new Date().toISOString() }).where(and(
+      eq(subscriptionUsage.id, reservationId),
+      eq(subscriptionUsage.ownerId, identity.ownerId),
+      eq(subscriptionUsage.status, "reserved"),
+    ));
+  }
 
   return Response.json({
     ok: true,

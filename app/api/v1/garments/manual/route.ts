@@ -2,6 +2,7 @@ import { getDb } from "@/db";
 import { garments } from "@/db/schema";
 import { requireDevice } from "@/lib/device-auth";
 import { garmentCutoutKey, getMediaBucket } from "@/lib/storage";
+import { recordConsumedUsage, requireUsageCapacity, SubscriptionUsageError } from "@/lib/subscription-usage-server";
 
 const maximumImageBytes = 15 * 1024 * 1024;
 const validCategories = new Set(["tops", "layers", "bottoms", "footwear", "accessories"]);
@@ -33,6 +34,13 @@ export async function POST(request: Request) {
   }
 
   const garmentId = `garment_${crypto.randomUUID()}`;
+  let entitlement;
+  try {
+    entitlement = await requireUsageCapacity(identity.ownerId, "wardrobe_addition");
+  } catch (error) {
+    if (error instanceof SubscriptionUsageError) return failure(error.code, error.status);
+    throw error;
+  }
   const key = garmentCutoutKey(identity.ownerId, garmentId);
   const now = new Date().toISOString();
   await getMediaBucket().put(key, bytes, {
@@ -71,6 +79,7 @@ export async function POST(request: Request) {
     await getMediaBucket().delete(key).catch(() => undefined);
     throw error;
   }
+  await recordConsumedUsage(identity.ownerId, "wardrobe_addition", 1, `manual:${garmentId}`, entitlement);
 
   return Response.json({
     garment: {

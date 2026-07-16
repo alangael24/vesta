@@ -28,9 +28,20 @@ const termsUrl = "https://www.apple.com/legal/internet-services/itunes/dev/stdeu
 type Props = {
   visible: boolean;
   onClose: () => void;
+  cloud?: {
+    apiUrl: string;
+    dispatchToken: string;
+    deviceToken: string;
+  } | null;
 };
 
-export function SubscriptionPaywall({ visible, onClose }: Props) {
+type SubscriptionStatus = {
+  active: boolean;
+  allowances?: { wardrobeAdditions: number; lookGenerations: number } | null;
+  usage?: { wardrobeAdditions: number; lookGenerations: number } | null;
+};
+
+export function SubscriptionPaywall({ visible, onClose, cloud }: Props) {
   const [selectedPlan, setSelectedPlan] = useState<SubscriptionPlanId>("annual");
   const [purchasingProductId, setPurchasingProductId] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
@@ -38,6 +49,7 @@ export function SubscriptionPaywall({ visible, onClose }: Props) {
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const [storeMessage, setStoreMessage] = useState<string | null>(null);
   const [lastPurchase, setLastPurchase] = useState<Purchase | null>(null);
+  const [serverStatus, setServerStatus] = useState<SubscriptionStatus | null>(null);
   const processedTransactions = useRef(new Set<string>());
 
   const {
@@ -78,6 +90,18 @@ export function SubscriptionPaywall({ visible, onClose }: Props) {
   }, [visible, connected, hasActiveSubscriptions]);
 
   useEffect(() => {
+    if (!visible || !cloud) return;
+    fetch(`${cloud.apiUrl}/api/v1/subscription`, {
+      headers: {
+        "OAI-Sites-Authorization": `Bearer ${cloud.dispatchToken}`,
+        "x-vesta-device-token": cloud.deviceToken,
+      },
+    }).then(async (response) => {
+      if (response.ok) setServerStatus(await response.json() as SubscriptionStatus);
+    }).catch(() => undefined);
+  }, [cloud, visible]);
+
+  useEffect(() => {
     if (!lastPurchase) return;
     const transactionKey = lastPurchase.transactionId || lastPurchase.id;
     if (processedTransactions.current.has(transactionKey)) return;
@@ -93,6 +117,19 @@ export function SubscriptionPaywall({ visible, onClose }: Props) {
           if (!("isValid" in verification) || !verification.isValid) {
             throw new Error("subscription_verification_failed");
           }
+          if (!lastPurchase.purchaseToken) throw new Error("signed_transaction_missing");
+          if (!cloud) throw new Error("private_account_not_connected");
+          const response = await fetch(`${cloud.apiUrl}/api/v1/subscription`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "OAI-Sites-Authorization": `Bearer ${cloud.dispatchToken}`,
+              "x-vesta-device-token": cloud.deviceToken,
+            },
+            body: JSON.stringify({ signedTransaction: lastPurchase.purchaseToken }),
+          });
+          if (!response.ok) throw new Error("server_subscription_verification_failed");
+          setServerStatus(await response.json() as SubscriptionStatus);
         }
         await finishTransaction({ purchase: lastPurchase, isConsumable: false });
         setHasPremium(true);
@@ -108,7 +145,7 @@ export function SubscriptionPaywall({ visible, onClose }: Props) {
     };
 
     finish().catch(() => undefined);
-  }, [finishTransaction, lastPurchase, verifyPurchase]);
+  }, [cloud, finishTransaction, lastPurchase, verifyPurchase]);
 
   const selected = subscriptionPlans.find((plan) => plan.id === selectedPlan)!;
   const selectedProduct = productsById.get(selected.productId);
@@ -193,12 +230,20 @@ export function SubscriptionPaywall({ visible, onClose }: Props) {
             {hasPremium && (
               <View style={styles.activePill}><View style={styles.activeDot} /><Text style={styles.activeText}>PREMIUM ACTIVO EN ESTE IPHONE</Text></View>
             )}
-            {[
-              "Tu armario privado siempre sincronizado",
-              "Prueba outfits completos sobre tu avatar",
-              "Combina prendas tuyas con productos de internet",
-              "Guarda tus looks para volver a verlos cuando quieras",
-            ].map((benefit) => (
+            {serverStatus?.active && serverStatus.allowances && serverStatus.usage && (
+              <View style={styles.quotaCard}>
+                <View style={styles.quotaRow}>
+                  <Text style={styles.quotaLabel}>Prendas disponibles</Text>
+                  <Text style={styles.quotaValue}>{Math.max(0, serverStatus.allowances.wardrobeAdditions - serverStatus.usage.wardrobeAdditions)} de {serverStatus.allowances.wardrobeAdditions}</Text>
+                </View>
+                <View style={styles.quotaRow}>
+                  <Text style={styles.quotaLabel}>Looks disponibles</Text>
+                  <Text style={styles.quotaValue}>{Math.max(0, serverStatus.allowances.lookGenerations - serverStatus.usage.lookGenerations)} de {serverStatus.allowances.lookGenerations}</Text>
+                </View>
+                <Text style={styles.quotaNote}>Abrir Looks guardados no consume unidades.</Text>
+              </View>
+            )}
+            {selected.benefits.map((benefit) => (
               <View style={styles.benefitRow} key={benefit}>
                 <View style={styles.checkCircle}><Text style={styles.check}>✓</Text></View>
                 <Text style={styles.benefit}>{benefit}</Text>
@@ -282,6 +327,11 @@ const styles = StyleSheet.create({
   activePill: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 18, backgroundColor: "#17241E" },
   activeDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: "#71B78D" },
   activeText: { color: "#8DD0A6", fontSize: 9, fontWeight: "900", letterSpacing: .7 },
+  quotaCard: { padding: 15, borderWidth: 1, borderColor: line, borderRadius: 16, backgroundColor: panel },
+  quotaRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginVertical: 4 },
+  quotaLabel: { color: ink, fontSize: 13, fontWeight: "700" },
+  quotaValue: { color: "#BEB6FF", fontSize: 13, fontWeight: "900" },
+  quotaNote: { color: muted, fontSize: 11, marginTop: 8 },
   benefitRow: { minHeight: 58, flexDirection: "row", alignItems: "center", gap: 14 },
   checkCircle: { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center", backgroundColor: "#26232F" },
   check: { color: violet, fontSize: 27, fontWeight: "700" },

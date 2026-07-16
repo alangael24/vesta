@@ -13,6 +13,7 @@ import {
   ProductPlacement,
 } from "@/lib/product-import";
 import { getMediaBucket, internetGarmentKey } from "@/lib/storage";
+import { recordConsumedUsage, requireUsageCapacity, SubscriptionUsageError } from "@/lib/subscription-usage-server";
 
 const maximumPageBytes = 2 * 1024 * 1024;
 const maximumImageBytes = 15 * 1024 * 1024;
@@ -49,6 +50,14 @@ export async function POST(request: Request) {
       return Response.json({ garment: garmentResponse({ ...existing, ...classification }) }, { headers: privateHeaders() });
     }
     return Response.json({ garment: garmentResponse(existing), existing: true }, { headers: privateHeaders() });
+  }
+
+  let entitlement;
+  try {
+    entitlement = await requireUsageCapacity(identity.ownerId, "wardrobe_addition");
+  } catch (error) {
+    if (error instanceof SubscriptionUsageError) return failure(error.code, error.status);
+    throw error;
   }
 
   try {
@@ -137,6 +146,7 @@ export async function POST(request: Request) {
       await getMediaBucket().delete(key).catch(() => undefined);
       throw error;
     }
+    await recordConsumedUsage(identity.ownerId, "wardrobe_addition", 1, `internet:${garmentId}`, entitlement);
 
     return Response.json({
       garment: garmentResponse({
