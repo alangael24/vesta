@@ -71,6 +71,13 @@
       "when": 1784185456682,
       "tag": "0009_boring_speed",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1784187165185,
+      "tag": "0010_safe_nekra",
+      "breakpoints": true
     }
   ]
 }

@@ -105,6 +105,8 @@ export const garments = sqliteTable("garments", {
   category: text("category").notNull(),
   type: text("type").notNull(),
   color: text("color"),
+  secondaryColor: text("secondary_color"),
+  tagsJson: text("tags_json"),
   material: text("material"),
   description: text("description"),
   sourceType: text("source_type", { enum: ["photos", "internet"] }).notNull().default("photos"),

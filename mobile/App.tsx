@@ -31,7 +31,7 @@ import { SubscriptionPaywall } from "./SubscriptionPaywall";
 import { PrivacyPolicyModal } from "./PrivacyPolicy";
 
 type ViewName = "closet" | "builder" | "looks" | "calendar";
-type Category = "all" | "tops" | "layers" | "bottoms" | "accessories";
+type Category = "all" | "tops" | "layers" | "bottoms" | "footwear" | "accessories" | "one_piece";
 type ItemId = number | string;
 
 type WardrobeItem = {
@@ -40,6 +40,8 @@ type WardrobeItem = {
   category: Exclude<Category, "all">;
   type: string;
   color: string;
+  secondaryColor?: string | null;
+  tags?: string[];
   material?: string;
   description?: string;
   sourceType?: "photos" | "internet";
@@ -100,6 +102,8 @@ type CloudGarment = {
   category: string;
   type: string;
   color: string;
+  secondaryColor?: string | null;
+  tags?: string[];
   material?: string;
   description?: string;
   sourceType?: "photos" | "internet";
@@ -134,6 +138,13 @@ type CalendarEntry = {
 
 type ImportStage = "idle" | "waiting" | "staging" | "uploading" | "analyzing" | "complete" | "error";
 type AppNotice = { id: number; tone: "success" | "error" | "info"; title: string; message?: string };
+type GarmentEditDraft = {
+  name: string;
+  category: Exclude<Category, "all">;
+  color: string;
+  secondaryColor: string;
+  tagsText: string;
+};
 
 type QueuedImportPhoto = {
   asset: ImagePicker.ImagePickerAsset;
@@ -386,8 +397,12 @@ const filters: { id: Category; label: string }[] = [
   { id: "tops", label: "Arriba" },
   { id: "layers", label: "Capas" },
   { id: "bottoms", label: "Abajo" },
+  { id: "footwear", label: "Calzado" },
   { id: "accessories", label: "Accesorios" },
+  { id: "one_piece", label: "Prenda completa" },
 ];
+
+const garmentCategoryOptions: Array<{ id: Exclude<Category, "all">; label: string }> = filters.slice(1) as Array<{ id: Exclude<Category, "all">; label: string }>;
 
 const productPlacements: Array<{ id: ProductPlacementHint; label: string }> = [
   { id: "auto", label: "Auto" },
@@ -607,11 +622,12 @@ const LookCard = memo(function LookCard({
 
 function fittingSlotFor(item: WardrobeItem): FittingSlot {
   const descriptor = `${item.type} ${item.name} ${item.description || ""}`.toLowerCase();
+  if (item.category === "footwear") return "feet";
   if (/(gorra|cachucha|sombrero|beanie|bucket|\bcap\b|\bhat\b)/u.test(descriptor)) return "head";
   if (/(zapato|tenis|shoe|sneaker|bota|calzado)/u.test(descriptor)) return "feet";
   if (item.category === "bottoms") return "legs";
   if (item.category === "layers") return "outer";
-  if (item.category === "tops") return "top";
+  if (item.category === "tops" || item.category === "one_piece") return "top";
   return "accessory";
 }
 
@@ -802,6 +818,9 @@ export default function App() {
   const [cloudAvatar, setCloudAvatar] = useState<CloudAvatar | null>(null);
   const [localAvatarUri, setLocalAvatarUri] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<WardrobeItem | null>(null);
+  const [editingGarment, setEditingGarment] = useState(false);
+  const [savingGarment, setSavingGarment] = useState(false);
+  const [garmentEditDraft, setGarmentEditDraft] = useState<GarmentEditDraft | null>(null);
   const [selectedOutfit, setSelectedOutfit] = useState<Outfit | null>(null);
   const [peekedOutfit, setPeekedOutfit] = useState<Outfit | null>(null);
   const [photos, setPhotos] = useState<ImagePicker.ImagePickerAsset[]>([]);
@@ -861,6 +880,16 @@ export default function App() {
     const timeout = setTimeout(() => setNotice((current) => current?.id === notice.id ? null : current), notice.tone === "error" ? 5200 : 3200);
     return () => clearTimeout(timeout);
   }, [notice]);
+
+  useEffect(() => {
+    if (!selectedItem) {
+      setEditingGarment(false);
+      setGarmentEditDraft(null);
+      return;
+    }
+    setEditingGarment(false);
+    setGarmentEditDraft(garmentDraftFor(selectedItem));
+  }, [selectedItem?.id]);
 
   const activeWardrobe = cloudWardrobe;
 
@@ -1649,6 +1678,63 @@ export default function App() {
         },
       ],
     );
+  };
+
+  const saveGarmentMetadata = async () => {
+    if (!cloudSession || !selectedItem || !garmentEditDraft || savingGarment) return;
+    const name = garmentEditDraft.name.replace(/\s+/gu, " ").trim();
+    const color = garmentEditDraft.color.replace(/\s+/gu, " ").trim();
+    if (!name || !color) {
+      showNotice("Completa la información", "El nombre y el color principal son obligatorios.", "error");
+      return;
+    }
+    const tags = Array.from(new Set(garmentEditDraft.tagsText
+      .split(",")
+      .map((tag) => tag.replace(/\s+/gu, " ").trim())
+      .filter(Boolean)
+      .map((tag) => tag.slice(0, 30))))
+      .slice(0, 12);
+    setSavingGarment(true);
+    try {
+      const response = await cloudFetch(cloudSession, `/api/v1/garments/${selectedItem.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          category: garmentEditDraft.category,
+          color,
+          secondaryColor: garmentEditDraft.secondaryColor.replace(/\s+/gu, " ").trim() || null,
+          tags,
+        }),
+      });
+      const payload = await response.json() as { error?: string; garment?: Partial<CloudGarment> & { id: string } };
+      if (!response.ok || !payload.garment) throw new Error(payload.error || "garment_update_failed");
+      const updated: WardrobeItem = {
+        ...selectedItem,
+        ...payload.garment,
+        category: categoryForUi(payload.garment.category || selectedItem.category),
+      };
+      const nextWardrobe = cloudWardrobe.map((item) => String(item.id) === String(updated.id)
+        ? { ...item, ...updated, localImageUri: item.localImageUri }
+        : item);
+      setCloudWardrobe(nextWardrobe);
+      setSelectedItem(updated);
+      setTryOnLayers((current) => current.map((layer) => String(layer.item.id) === String(updated.id)
+        ? { ...layer, item: { ...layer.item, ...updated } }
+        : layer));
+      setOutfits((current) => current.map((outfit) => ({
+        ...outfit,
+        pieces: outfit.pieces.map((piece) => String(piece.id) === String(updated.id) ? { ...piece, ...updated } : piece),
+      })));
+      await persistWardrobeCache(cloudSession, nextWardrobe);
+      setGarmentEditDraft(garmentDraftFor(updated));
+      setEditingGarment(false);
+      showNotice("Prenda actualizada", "Los cambios ya aparecen en tu armario y tus Looks.", "success");
+    } catch {
+      showNotice("No pudimos guardar los cambios", "Comprueba tu conexión e inténtalo otra vez.", "error");
+    } finally {
+      setSavingGarment(false);
+    }
   };
 
   const deleteGarment = (item: WardrobeItem) => {
@@ -2949,36 +3035,131 @@ export default function App() {
         </View>
       </Modal>
 
-      <Modal visible={Boolean(selectedItem)} transparent animationType="slide" onRequestClose={() => setSelectedItem(null)}>
+      <Modal visible={Boolean(selectedItem)} transparent animationType="slide" onRequestClose={() => !savingGarment && setSelectedItem(null)}>
         <View style={styles.detailBackdrop}>
           <View style={styles.detailSheet}>
-            <Pressable style={styles.closeButton} onPress={() => setSelectedItem(null)}><Text style={styles.closeText}>×</Text></Pressable>
-            {selectedItem && <GarmentVisual item={selectedItem} session={cloudSession} />}
-            {selectedItem && (
-              <View style={styles.detailCopy}>
-                <Text style={styles.eyebrow}>{selectedItem.type.toUpperCase()}</Text>
-                <Text style={styles.detailTitle}>{selectedItem.name}</Text>
-                <Text style={styles.detailIntro}>{selectedItem.description || (selectedItem.imagePath ? "Esta es la foto original de la prenda. Prepara su imagen para usarla en tus Looks." : "Esta prenda todavía se está preparando.")}</Text>
-                {selectedItem.qaSummary?.summary && <Text style={styles.qaSummary}>{selectedItem.qaSummary.summary}</Text>}
-                {selectedItem.isBasic && <Text style={styles.qaSummary}>Básico reconocido · conservamos la foto original sin gastar una generación.</Text>}
-                {selectedItem.sourceType === "internet" && selectedItem.sourceUrl && (
-                  <Pressable style={styles.secondaryButton} onPress={() => Linking.openURL(selectedItem.sourceUrl!).catch(() => undefined)}>
-                    <Text style={styles.secondaryButtonText}>Abrir página del producto ↗</Text>
-                  </Pressable>
-                )}
-                {selectedItem.imagePath && !selectedItem.isBasic && selectedItem.sourceType !== "internet" && (
-                  <Pressable style={[styles.fullButton, styles.reconstructAction, reconstructingId === selectedItem.id && styles.disabledButton]} onPress={() => chooseReconstruction(selectedItem)} disabled={reconstructingId === selectedItem.id}>
-                    <Text style={styles.fullButtonText}>{reconstructingId === selectedItem.id ? "Creando y verificando…" : selectedItem.status === "approved" ? "Regenerar imagen" : "Crear imagen transparente"}</Text>
-                  </Pressable>
-                )}
-                <Pressable style={styles.fullButton} onPress={() => addToTryOn(selectedItem)}>
-                  <Text style={styles.fullButtonText}>{tryOnLayers.some((layer) => layer.item.id === selectedItem.id) ? "✓ En el probador" : "＋ Probar en mi avatar"}</Text>
-                </Pressable>
-                <Pressable onPress={() => deleteGarment(selectedItem)} disabled={deletingGarmentId !== null}>
-                  <Text style={[styles.deleteText, deletingGarmentId !== null && styles.disabledText]}>{deletingGarmentId === selectedItem.id ? "Eliminando prenda…" : "Eliminar de mi armario"}</Text>
-                </Pressable>
-              </View>
-            )}
+            <Pressable style={styles.closeButton} onPress={() => setSelectedItem(null)} disabled={savingGarment}><Text style={styles.closeText}>×</Text></Pressable>
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              {selectedItem && <GarmentVisual item={selectedItem} session={cloudSession} />}
+              {selectedItem && garmentEditDraft && (
+                <View style={styles.detailCopy}>
+                  {editingGarment ? (
+                    <View style={styles.garmentEditor}>
+                      <Text style={styles.eyebrow}>EDITAR PRENDA</Text>
+                      <Text style={styles.detailTitle}>Hazla tuya.</Text>
+                      <Text style={styles.editorIntro}>Corrige la información una vez y se actualizará en tu armario, probador y Looks.</Text>
+
+                      <Text style={styles.editorLabel}>NOMBRE</Text>
+                      <TextInput
+                        style={styles.editorInput}
+                        value={garmentEditDraft.name}
+                        onChangeText={(name) => setGarmentEditDraft((current) => current ? { ...current, name } : current)}
+                        placeholder="Nombre de la prenda"
+                        placeholderTextColor="#9B9386"
+                        maxLength={100}
+                      />
+
+                      <Text style={styles.editorLabel}>CATEGORÍA</Text>
+                      <View style={styles.editorCategoryGrid}>
+                        {garmentCategoryOptions.map((option) => (
+                          <Pressable
+                            key={option.id}
+                            style={[styles.editorCategory, garmentEditDraft.category === option.id && styles.editorCategoryActive]}
+                            onPress={() => setGarmentEditDraft((current) => current ? { ...current, category: option.id } : current)}
+                          >
+                            <Text style={[styles.editorCategoryText, garmentEditDraft.category === option.id && styles.editorCategoryTextActive]}>{option.label}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+
+                      <Text style={styles.editorLabel}>COLOR PRINCIPAL</Text>
+                      <View style={styles.editorColorRow}>
+                        <View style={[styles.editorColorSwatch, { backgroundColor: colorPreview(garmentEditDraft.color) }]} />
+                        <TextInput
+                          style={[styles.editorInput, styles.editorColorInput]}
+                          value={garmentEditDraft.color}
+                          onChangeText={(color) => setGarmentEditDraft((current) => current ? { ...current, color } : current)}
+                          placeholder="Ej. negro o #191919"
+                          placeholderTextColor="#9B9386"
+                          maxLength={60}
+                        />
+                      </View>
+
+                      <Text style={styles.editorLabel}>COLOR SECUNDARIO <Text style={styles.editorOptional}>OPCIONAL</Text></Text>
+                      <View style={styles.editorColorRow}>
+                        <View style={[styles.editorColorSwatch, { backgroundColor: colorPreview(garmentEditDraft.secondaryColor) }]} />
+                        <TextInput
+                          style={[styles.editorInput, styles.editorColorInput]}
+                          value={garmentEditDraft.secondaryColor}
+                          onChangeText={(secondaryColor) => setGarmentEditDraft((current) => current ? { ...current, secondaryColor } : current)}
+                          placeholder="Ej. blanco o #F5F1E8"
+                          placeholderTextColor="#9B9386"
+                          maxLength={60}
+                        />
+                      </View>
+
+                      <Text style={styles.editorLabel}>ETIQUETAS</Text>
+                      <TextInput
+                        style={[styles.editorInput, styles.editorTagsInput]}
+                        value={garmentEditDraft.tagsText}
+                        onChangeText={(tagsText) => setGarmentEditDraft((current) => current ? { ...current, tagsText } : current)}
+                        placeholder="casual, algodón, verano"
+                        placeholderTextColor="#9B9386"
+                        multiline
+                        maxLength={380}
+                      />
+                      <Text style={styles.editorHelp}>Separa las etiquetas con comas. Máximo 12.</Text>
+
+                      <View style={styles.editorActions}>
+                        <Pressable style={styles.editorCancelButton} onPress={() => { setGarmentEditDraft(garmentDraftFor(selectedItem)); setEditingGarment(false); }} disabled={savingGarment}>
+                          <Text style={styles.editorCancelText}>Cancelar</Text>
+                        </Pressable>
+                        <Pressable style={[styles.editorSaveButton, savingGarment && styles.disabledButton]} onPress={saveGarmentMetadata} disabled={savingGarment}>
+                          {savingGarment ? <ActivityIndicator color={paper} /> : <Text style={styles.editorSaveText}>Guardar cambios</Text>}
+                        </Pressable>
+                      </View>
+                    </View>
+                  ) : (
+                    <>
+                      <View style={styles.detailHeadingRow}>
+                        <View style={styles.detailHeadingCopy}>
+                          <Text style={styles.eyebrow}>{selectedItem.type.toUpperCase()}</Text>
+                          <Text style={styles.detailTitle}>{selectedItem.name}</Text>
+                        </View>
+                        <Pressable style={styles.editGarmentButton} onPress={() => setEditingGarment(true)} accessibilityLabel="Editar información de la prenda">
+                          <Text style={styles.editGarmentButtonText}>Editar</Text>
+                        </Pressable>
+                      </View>
+                      <View style={styles.garmentMetadataSummary}>
+                        <View style={[styles.metadataColorDot, { backgroundColor: colorPreview(selectedItem.color) }]} />
+                        <Text style={styles.metadataSummaryText}>{selectedItem.color}</Text>
+                        {selectedItem.secondaryColor ? <><Text style={styles.metadataSeparator}>＋</Text><View style={[styles.metadataColorDot, { backgroundColor: colorPreview(selectedItem.secondaryColor) }]} /><Text style={styles.metadataSummaryText}>{selectedItem.secondaryColor}</Text></> : null}
+                      </View>
+                      {!!selectedItem.tags?.length && <View style={styles.metadataTags}>{selectedItem.tags.map((tag) => <View key={tag} style={styles.metadataTag}><Text style={styles.metadataTagText}>{tag}</Text></View>)}</View>}
+                      <Text style={styles.detailIntro}>{selectedItem.description || (selectedItem.imagePath ? "Esta es la foto original de la prenda. Prepara su imagen para usarla en tus Looks." : "Esta prenda todavía se está preparando.")}</Text>
+                      {selectedItem.qaSummary?.summary && <Text style={styles.qaSummary}>{selectedItem.qaSummary.summary}</Text>}
+                      {selectedItem.isBasic && <Text style={styles.qaSummary}>Básico reconocido · conservamos la foto original sin gastar una generación.</Text>}
+                      {selectedItem.sourceType === "internet" && selectedItem.sourceUrl && (
+                        <Pressable style={styles.secondaryButton} onPress={() => Linking.openURL(selectedItem.sourceUrl!).catch(() => undefined)}>
+                          <Text style={styles.secondaryButtonText}>Abrir página del producto ↗</Text>
+                        </Pressable>
+                      )}
+                      {selectedItem.imagePath && !selectedItem.isBasic && selectedItem.sourceType !== "internet" && (
+                        <Pressable style={[styles.fullButton, styles.reconstructAction, reconstructingId === selectedItem.id && styles.disabledButton]} onPress={() => chooseReconstruction(selectedItem)} disabled={reconstructingId === selectedItem.id}>
+                          <Text style={styles.fullButtonText}>{reconstructingId === selectedItem.id ? "Creando y verificando…" : selectedItem.status === "approved" ? "Regenerar imagen" : "Crear imagen transparente"}</Text>
+                        </Pressable>
+                      )}
+                      <Pressable style={styles.fullButton} onPress={() => addToTryOn(selectedItem)}>
+                        <Text style={styles.fullButtonText}>{tryOnLayers.some((layer) => layer.item.id === selectedItem.id) ? "✓ En el probador" : "＋ Probar en mi avatar"}</Text>
+                      </Pressable>
+                      <Pressable onPress={() => deleteGarment(selectedItem)} disabled={deletingGarmentId !== null}>
+                        <Text style={[styles.deleteText, deletingGarmentId !== null && styles.disabledText]}>{deletingGarmentId === selectedItem.id ? "Eliminando prenda…" : "Eliminar de mi armario"}</Text>
+                      </Pressable>
+                    </>
+                  )}
+                </View>
+              )}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -3389,8 +3570,39 @@ const styles = StyleSheet.create({
   detailBackdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(22,20,17,.45)" },
   detailSheet: { maxHeight: "90%", overflow: "hidden", backgroundColor: paper, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
   detailCopy: { padding: 22, paddingBottom: 34 },
+  detailHeadingRow: { flexDirection: "row", alignItems: "flex-start", gap: 12 },
+  detailHeadingCopy: { flex: 1 },
   detailTitle: { color: ink, fontSize: 34, lineHeight: 37, letterSpacing: -1.2, fontFamily: Platform.select({ ios: "Georgia", android: "serif" }) },
   detailIntro: { color: muted, fontSize: 10, lineHeight: 16, marginTop: 12, marginBottom: 20 },
+  editGarmentButton: { marginTop: 3, paddingHorizontal: 15, paddingVertical: 9, borderRadius: 18, borderWidth: 1, borderColor: line, backgroundColor: "#F8F5ED" },
+  editGarmentButtonText: { color: rust, fontSize: 8, fontWeight: "900", letterSpacing: 0.4 },
+  garmentMetadataSummary: { minHeight: 24, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6, marginTop: 13 },
+  metadataColorDot: { width: 15, height: 15, borderRadius: 8, borderWidth: 1, borderColor: "rgba(25,24,21,.16)" },
+  metadataSummaryText: { color: muted, fontSize: 8, fontWeight: "700" },
+  metadataSeparator: { color: "#A79F92", fontSize: 9 },
+  metadataTags: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 9 },
+  metadataTag: { paddingHorizontal: 9, paddingVertical: 6, borderRadius: 14, backgroundColor: "#E9E2D5" },
+  metadataTagText: { color: ink, fontSize: 7, fontWeight: "700" },
+  garmentEditor: { paddingTop: 3 },
+  editorIntro: { color: muted, fontSize: 9, lineHeight: 14, marginTop: 9, marginBottom: 19 },
+  editorLabel: { color: ink, fontSize: 7, fontWeight: "900", letterSpacing: 1, marginTop: 14, marginBottom: 7 },
+  editorOptional: { color: muted, fontSize: 6, fontWeight: "700", letterSpacing: 0.5 },
+  editorInput: { minHeight: 46, paddingHorizontal: 13, paddingVertical: 11, borderWidth: 1, borderColor: line, borderRadius: 13, backgroundColor: "#F8F5ED", color: ink, fontSize: 11 },
+  editorCategoryGrid: { flexDirection: "row", flexWrap: "wrap", gap: 7 },
+  editorCategory: { paddingHorizontal: 12, paddingVertical: 9, borderWidth: 1, borderColor: line, borderRadius: 17, backgroundColor: "#F8F5ED" },
+  editorCategoryActive: { borderColor: ink, backgroundColor: ink },
+  editorCategoryText: { color: muted, fontSize: 8, fontWeight: "700" },
+  editorCategoryTextActive: { color: paper },
+  editorColorRow: { flexDirection: "row", alignItems: "center", gap: 9 },
+  editorColorSwatch: { width: 46, height: 46, borderRadius: 13, borderWidth: 1, borderColor: "rgba(25,24,21,.16)" },
+  editorColorInput: { flex: 1 },
+  editorTagsInput: { minHeight: 72, textAlignVertical: "top" },
+  editorHelp: { color: muted, fontSize: 7, marginTop: 6 },
+  editorActions: { flexDirection: "row", gap: 9, marginTop: 22 },
+  editorCancelButton: { flex: 1, minHeight: 47, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: line, borderRadius: 24, backgroundColor: "#F8F5ED" },
+  editorCancelText: { color: ink, fontSize: 9, fontWeight: "800" },
+  editorSaveButton: { flex: 1.5, minHeight: 47, alignItems: "center", justifyContent: "center", borderRadius: 24, backgroundColor: rust },
+  editorSaveText: { color: paper, fontSize: 9, fontWeight: "900" },
   qaSummary: { color: rust, fontSize: 9, lineHeight: 14, marginTop: -8, marginBottom: 18 },
 });
 
@@ -3482,10 +3694,33 @@ function outfitIndexCachePath(session: CloudSession) {
 }
 
 function categoryForUi(category: string): Exclude<Category, "all"> {
-  if (category === "tops" || category === "layers" || category === "bottoms" || category === "accessories") return category;
-  if (category === "footwear") return "accessories";
-  if (category === "one_piece") return "layers";
+  if (category === "tops" || category === "layers" || category === "bottoms" || category === "footwear" || category === "accessories" || category === "one_piece") return category;
   return "accessories";
+}
+
+function garmentDraftFor(item: WardrobeItem): GarmentEditDraft {
+  return {
+    name: item.name,
+    category: item.category,
+    color: item.color === "Sin confirmar" ? "" : item.color,
+    secondaryColor: item.secondaryColor || "",
+    tagsText: (item.tags || []).join(", "),
+  };
+}
+
+function colorPreview(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/iu.test(normalized)) return normalized;
+  const colors: Record<string, string> = {
+    negro: "#191919", black: "#191919", blanco: "#f5f1e8", white: "#f5f1e8",
+    gris: "#88857f", gray: "#88857f", grey: "#88857f", rojo: "#b63f32", red: "#b63f32",
+    azul: "#315b86", blue: "#315b86", verde: "#547052", green: "#547052",
+    amarillo: "#d6aa3d", yellow: "#d6aa3d", naranja: "#c96b31", orange: "#c96b31",
+    rosa: "#cf8795", pink: "#cf8795", morado: "#70547f", purple: "#70547f",
+    beige: "#c9b99d", café: "#765443", cafe: "#765443", brown: "#765443",
+    camel: "#a97a48", oliva: "#6f7045", olive: "#6f7045", crema: "#e7ddc7", cream: "#e7ddc7",
+  };
+  return colors[normalized] || "#d8d1c4";
 }
 
 function statusLabel(status?: string) {

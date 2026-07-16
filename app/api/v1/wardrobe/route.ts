@@ -2,6 +2,7 @@ import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
 import { garmentEvidence, garments } from "@/db/schema";
 import { requireDevice } from "@/lib/device-auth";
+import { parseGarmentTags } from "@/lib/garment-metadata";
 
 export async function GET(request: Request) {
   const identity = await requireDevice(request);
@@ -13,6 +14,8 @@ export async function GET(request: Request) {
     category: garments.category,
     type: garments.type,
     color: garments.color,
+    secondaryColor: garments.secondaryColor,
+    tagsJson: garments.tagsJson,
     material: garments.material,
     description: garments.description,
     sourceType: garments.sourceType,
@@ -49,6 +52,8 @@ export async function GET(request: Request) {
       category: row.category,
       type: row.type,
       color: row.color || "Sin confirmar",
+      secondaryColor: row.secondaryColor,
+      tags: parseGarmentTags(row.tagsJson),
       material: row.material || "Sin confirmar",
       description: row.description || "Prenda detectada en tus fotos.",
       sourceType: row.sourceType,
