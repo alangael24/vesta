@@ -53,6 +53,17 @@ test("a placement hint overrides an ambiguous product name", () => {
   assert.equal(result.type, "gorra o accesorio de cabeza");
 });
 
+test("classifies feminine wardrobe essentials without treating dresses as layers", () => {
+  assert.deepEqual(classifyInternetGarment("Pink satin midi dress", new URL("https://shop.example.com/pink-midi-dress")), {
+    category: "one_piece",
+    type: "vestido",
+    color: "rosa",
+  });
+  assert.equal(classifyInternetGarment("Black pleated skirt", new URL("https://shop.example.com/skirt")).category, "bottoms");
+  assert.equal(classifyInternetGarment("Camel shoulder bag", new URL("https://shop.example.com/bag")).category, "accessories");
+  assert.equal(classifyInternetGarment("Essential", new URL("https://shop.example.com/item"), "one_piece").category, "one_piece");
+});
+
 test("canonical URLs discard tracking while remote URL checks reject private networks", () => {
   assert.equal(
     canonicalizeProductUrl("shop.example.com/cap?utm_source=x&size=m&fbclid=abc").toString(),

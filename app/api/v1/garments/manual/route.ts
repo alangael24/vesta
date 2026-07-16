@@ -5,7 +5,7 @@ import { garmentCutoutKey, getMediaBucket } from "@/lib/storage";
 import { recordConsumedUsage, requireUsageCapacity, SubscriptionUsageError } from "@/lib/subscription-usage-server";
 
 const maximumImageBytes = 15 * 1024 * 1024;
-const validCategories = new Set(["tops", "layers", "bottoms", "footwear", "accessories"]);
+const validCategories = new Set(["tops", "layers", "bottoms", "footwear", "accessories", "one_piece"]);
 
 export async function POST(request: Request) {
   const identity = await requireDevice(request);
@@ -54,7 +54,7 @@ export async function POST(request: Request) {
       ownerId: identity.ownerId,
       batchId: null,
       name,
-      category: category as "tops" | "layers" | "bottoms" | "footwear" | "accessories",
+      category: category as "tops" | "layers" | "bottoms" | "footwear" | "accessories" | "one_piece",
       type,
       color,
       material: "Básico de referencia",

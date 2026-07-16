@@ -17,7 +17,7 @@ import { recordConsumedUsage, requireUsageCapacity, SubscriptionUsageError } fro
 
 const maximumPageBytes = 2 * 1024 * 1024;
 const maximumImageBytes = 15 * 1024 * 1024;
-const placements = new Set<ProductPlacement>(["auto", "head", "top", "outer", "legs", "feet"]);
+const placements = new Set<ProductPlacement>(["auto", "head", "top", "outer", "legs", "one_piece", "feet"]);
 
 export async function POST(request: Request) {
   const identity = await requireDevice(request);

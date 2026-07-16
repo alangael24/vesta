@@ -1,7 +1,7 @@
-export type ProductPlacement = "auto" | "head" | "top" | "outer" | "legs" | "feet";
+export type ProductPlacement = "auto" | "head" | "top" | "outer" | "legs" | "one_piece" | "feet";
 
 export type InternetGarmentClassification = {
-  category: "tops" | "layers" | "bottoms" | "footwear" | "accessories";
+  category: "tops" | "layers" | "bottoms" | "footwear" | "accessories" | "one_piece";
   type: string;
   color: string;
 };
@@ -111,14 +111,20 @@ export function classifyInternetGarment(title: string, productUrl: URL, placemen
   if (/(sneaker|trainer|shoe|boot|loafer|sandal|zapato|tenis|bota|calzado|zapatilla)/u.test(descriptor)) {
     return { category: "footwear", type: "calzado", color };
   }
-  if (/(jean|pants|trouser|chino|shorts|jogger|sweatpant|pantal[oó]n|vaquero|bermuda)/u.test(descriptor)) {
-    return { category: "bottoms", type: "pantalón", color };
+  if (/(handbag|shoulder bag|crossbody|tote|clutch|purse|bolso|cartera|bandolera)/u.test(descriptor)) {
+    return { category: "accessories", type: "bolso", color };
+  }
+  if (/(necklace|earring|bracelet|ring|jewelry|jewellery|collar|arete|pendiente|pulsera|anillo|joyer[ií]a)/u.test(descriptor)) {
+    return { category: "accessories", type: "joyería", color };
+  }
+  if (/(skirt|jean|pants|trouser|chino|shorts|jogger|sweatpant|falda|pantal[oó]n|vaquero|bermuda)/u.test(descriptor)) {
+    return { category: "bottoms", type: /skirt|falda/u.test(descriptor) ? "falda" : "pantalón", color };
+  }
+  if (/(dress|jumpsuit|romper|overall|vestido|mono|enterizo)/u.test(descriptor)) {
+    return { category: "one_piece", type: /dress|vestido/u.test(descriptor) ? "vestido" : "enterizo", color };
   }
   if (/(jacket|coat|hoodie|sweater|cardigan|overshirt|blazer|chaqueta|abrigo|sudadera|su[eé]ter|cazadora)/u.test(descriptor)) {
     return { category: "layers", type: "capa exterior", color };
-  }
-  if (/(dress|jumpsuit|overall|vestido|mono|enterizo)/u.test(descriptor)) {
-    return { category: "layers", type: "prenda de una pieza", color };
   }
   if (/(t-?shirt|tee|shirt|polo|tank|jersey|blouse|camisa|camiseta|playera|polo|top)/u.test(descriptor)) {
     return { category: "tops", type: "prenda superior", color };
@@ -131,6 +137,7 @@ function classificationForPlacement(placement: Exclude<ProductPlacement, "auto">
   if (placement === "head") return { category: "accessories", type: "gorra o accesorio de cabeza", color };
   if (placement === "outer") return { category: "layers", type: "capa exterior", color };
   if (placement === "legs") return { category: "bottoms", type: "prenda inferior", color };
+  if (placement === "one_piece") return { category: "one_piece", type: "vestido o enterizo", color };
   if (placement === "feet") return { category: "footwear", type: "calzado", color };
   return { category: "tops", type: "prenda superior", color };
 }

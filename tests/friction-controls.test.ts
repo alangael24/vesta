@@ -34,3 +34,12 @@ test("account deletion removes private media and the owner record", () => {
   assert.match(accountRoute, /bucket\.delete/u);
   assert.match(accountRoute, /delete\(users\)\.where/u);
 });
+
+test("the closet uses four simple filters while preserving feminine garment types", () => {
+  assert.match(mobileApp, /type ClosetFilter = "all" \| "clothing" \| "footwear" \| "accessories"/u);
+  assert.match(mobileApp, /\{ id: "clothing", label: "Ropa" \}/u);
+  assert.match(mobileApp, /Vestidos y enterizos/u);
+  assert.match(mobileApp, /Faldas y pantalones/u);
+  assert.match(mobileApp, /Bolsos y accesorios/u);
+  assert.match(mobileApp, /fittingSlotsConflict/u);
+});

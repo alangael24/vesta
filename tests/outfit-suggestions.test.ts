@@ -31,6 +31,19 @@ test("requires at least one top and one bottom", () => {
   assert.deepEqual(suggestOutfits(wardrobe.filter((item) => item.category !== "bottoms"), 3), []);
 });
 
+test("builds a complete outfit around a dress without adding pants", () => {
+  const feminineWardrobe = [
+    { id: "dress-pink", name: "Vestido rosa", category: "one_piece", type: "Vestido", color: "Rosa" },
+    { id: "heels-black", name: "Tacones negros", category: "footwear", type: "Zapatos", color: "Negro" },
+    { id: "bag-black", name: "Bolso negro", category: "accessories", type: "Bolso", color: "Negro" },
+    { id: "pants-black", name: "Pantalón negro", category: "bottoms", type: "Pantalón", color: "Negro" },
+  ];
+  const [suggestion] = suggestOutfits(feminineWardrobe, 1);
+  assert.ok(suggestion.garmentIds.includes("dress-pink"));
+  assert.ok(!suggestion.garmentIds.includes("pants-black"));
+  assert.match(suggestion.rationale, /sin añadir pantalón/u);
+});
+
 test("learns from photographed outfits while proposing a new combination", () => {
   const photographed = [wardrobe.find((item) => item.id === "top-blue")!, wardrobe.find((item) => item.id === "pants-khaki")!];
   const photographedSignature = signatureFor(photographed.map((item) => item.id));

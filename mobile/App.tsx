@@ -32,6 +32,7 @@ import { PrivacyPolicyModal } from "./PrivacyPolicy";
 
 type ViewName = "closet" | "builder" | "looks" | "calendar";
 type Category = "all" | "tops" | "layers" | "bottoms" | "footwear" | "accessories" | "one_piece";
+type ClosetFilter = "all" | "clothing" | "footwear" | "accessories";
 type ItemId = number | string;
 
 type WardrobeItem = {
@@ -79,14 +80,14 @@ type TryOnLayer = {
 
 type TryOnRenderQuality = "low" | "medium";
 type PaywallReason = "wardrobe" | "try_on" | "looks";
-type ProductPlacementHint = "auto" | "head" | "top" | "outer" | "legs" | "feet";
+type ProductPlacementHint = "auto" | "head" | "top" | "outer" | "legs" | "one_piece" | "feet";
 type AvatarStatusPayload = {
   avatar?: CloudAvatar;
   generation?: { requestId: string; status: string; error?: string | null } | null;
 };
 
 type BodyRegion = "head" | "torso" | "legs" | "feet";
-type FittingSlot = "head" | "top" | "outer" | "legs" | "feet" | "accessory";
+type FittingSlot = "head" | "top" | "outer" | "legs" | "one_piece" | "feet" | "accessory";
 type WindowBounds = { x: number; y: number; width: number; height: number };
 type WardrobeDrag = { item: WardrobeItem; x: number; y: number; overCanvas: boolean };
 
@@ -393,24 +394,29 @@ function tryOnSignatureFor(layers: TryOnLayer[]) {
 const wardrobeSprite = require("./assets/wardrobe-sprite.png") as ImageSourcePropType;
 const legacyAlanAvatar = require("./assets/alan-avatar-base.png") as ImageSourcePropType;
 
-const filters: { id: Category; label: string }[] = [
+const filters: { id: ClosetFilter; label: string }[] = [
   { id: "all", label: "Todo" },
-  { id: "tops", label: "Arriba" },
-  { id: "layers", label: "Capas" },
-  { id: "bottoms", label: "Abajo" },
+  { id: "clothing", label: "Ropa" },
   { id: "footwear", label: "Calzado" },
   { id: "accessories", label: "Accesorios" },
-  { id: "one_piece", label: "Prenda completa" },
 ];
 
-const garmentCategoryOptions: Array<{ id: Exclude<Category, "all">; label: string }> = filters.slice(1) as Array<{ id: Exclude<Category, "all">; label: string }>;
+const garmentCategoryOptions: Array<{ id: Exclude<Category, "all">; label: string }> = [
+  { id: "tops", label: "Tops y blusas" },
+  { id: "layers", label: "Abrigos y capas" },
+  { id: "bottoms", label: "Faldas y pantalones" },
+  { id: "one_piece", label: "Vestidos y enterizos" },
+  { id: "footwear", label: "Calzado" },
+  { id: "accessories", label: "Bolsos y accesorios" },
+];
 
 const productPlacements: Array<{ id: ProductPlacementHint; label: string }> = [
   { id: "auto", label: "Auto" },
   { id: "head", label: "Cabeza" },
   { id: "top", label: "Arriba" },
-  { id: "outer", label: "Capa" },
-  { id: "legs", label: "Piernas" },
+  { id: "outer", label: "Abrigo" },
+  { id: "legs", label: "Falda / pantalón" },
+  { id: "one_piece", label: "Vestido" },
   { id: "feet", label: "Pies" },
 ];
 
@@ -628,8 +634,16 @@ function fittingSlotFor(item: WardrobeItem): FittingSlot {
   if (/(zapato|tenis|shoe|sneaker|bota|calzado)/u.test(descriptor)) return "feet";
   if (item.category === "bottoms") return "legs";
   if (item.category === "layers") return "outer";
-  if (item.category === "tops" || item.category === "one_piece") return "top";
+  if (item.category === "one_piece") return "one_piece";
+  if (item.category === "tops") return "top";
   return "accessory";
+}
+
+function fittingSlotsConflict(incoming: FittingSlot, existing: FittingSlot) {
+  if (incoming === "accessory") return false;
+  if (incoming === "one_piece") return existing === "one_piece" || existing === "top" || existing === "legs";
+  if (existing === "one_piece" && (incoming === "top" || incoming === "legs")) return true;
+  return incoming === existing;
 }
 
 function bodyRegionFor(item: WardrobeItem): BodyRegion {
@@ -646,6 +660,7 @@ function imagePlacementFor(item: WardrobeItem) {
   if (slot === "top") return "upper_body" as const;
   if (slot === "outer") return "outer_layer" as const;
   if (slot === "legs") return "lower_body" as const;
+  if (slot === "one_piece") return "upper_body" as const;
   if (slot === "feet") return "feet" as const;
   return "accessory" as const;
 }
@@ -808,7 +823,7 @@ function productImportErrorMessage(code: string) {
 export default function App() {
   const [notice, setNotice] = useState<AppNotice | null>(null);
   const [view, setView] = useState<ViewName>("closet");
-  const [filter, setFilter] = useState<Category>("all");
+  const [filter, setFilter] = useState<ClosetFilter>("all");
   const [importOpen, setImportOpen] = useState(false);
   const [linkImportOpen, setLinkImportOpen] = useState(false);
   const [productUrl, setProductUrl] = useState("");
@@ -923,7 +938,9 @@ export default function App() {
   const activeWardrobe = cloudWardrobe;
 
   const visibleItems = useMemo(
-    () => activeWardrobe.filter((item) => filter === "all" || item.category === filter),
+    () => activeWardrobe.filter((item) => filter === "all"
+      || item.category === filter
+      || (filter === "clothing" && ["tops", "layers", "bottoms", "one_piece"].includes(item.category))),
     [activeWardrobe, filter],
   );
   const localWardrobeImages = useMemo(() => new Map(
@@ -1980,7 +1997,7 @@ export default function App() {
       const previousLayers = tryOnLayers;
       const fittingSlot = fittingSlotFor(item);
       const nextLayers = [
-        ...previousLayers.filter((layer) => layer.item.id !== item.id && (fittingSlot === "accessory" || fittingSlotFor(layer.item) !== fittingSlot)),
+        ...previousLayers.filter((layer) => layer.item.id !== item.id && !fittingSlotsConflict(fittingSlot, fittingSlotFor(layer.item))),
         { key: `${item.id}-web-${Date.now()}`, item },
       ];
       setTryOnLayers(nextLayers);
@@ -2393,7 +2410,7 @@ export default function App() {
     const fittingSlot = fittingSlotFor(item);
     const previousLayers = tryOnLayers;
     const nextLayers = [
-      ...previousLayers.filter((layer) => fittingSlot === "accessory" || fittingSlotFor(layer.item) !== fittingSlot),
+      ...previousLayers.filter((layer) => !fittingSlotsConflict(fittingSlot, fittingSlotFor(layer.item))),
       { key, item },
     ];
     setTryOnLayers(nextLayers);

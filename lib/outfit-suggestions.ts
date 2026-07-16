@@ -28,14 +28,15 @@ export function suggestOutfits(
   existingSignatures = new Set<string>(),
   styleReferences: OutfitStyleReference[] = [],
 ): OutfitSuggestion[] {
-  const tops = garments.filter((item) => item.category === "tops" || item.category === "one_piece");
+  const tops = garments.filter((item) => item.category === "tops");
+  const onePieces = garments.filter((item) => item.category === "one_piece");
   const bottoms = garments.filter((item) => item.category === "bottoms");
   const layers = garments.filter((item) => item.category === "layers");
   const footwear = garments.filter((item) => item.category === "footwear" || isFootwear(item));
   const headwear = garments.filter((item) => item.category === "accessories" && isHeadwear(item));
   const accessories = garments.filter((item) => item.category === "accessories" && !isHeadwear(item) && !isFootwear(item));
 
-  if (!tops.length || !bottoms.length) return [];
+  if (!onePieces.length && (!tops.length || !bottoms.length)) return [];
 
   const candidates: Array<OutfitSuggestion & { score: number }> = [];
   let combinationIndex = 0;
@@ -73,6 +74,41 @@ export function suggestOutfits(
         }
         combinationIndex += 1;
       }
+    }
+  }
+
+  for (const onePiece of onePieces) {
+    const compatibleLayers = layers
+      .map((layer) => ({ layer, score: compatibilityScore(layer.color, onePiece.color) }))
+      .sort((a, b) => b.score - a.score || a.layer.name.localeCompare(b.layer.name));
+    const layerChoices: Array<OutfitSuggestionGarment | undefined> = [undefined];
+    if (compatibleLayers.length) layerChoices.push(compatibleLayers[combinationIndex % compatibleLayers.length].layer);
+
+    for (const layer of layerChoices) {
+      const selected = [onePiece, ...(layer ? [layer] : [])];
+      const shoe = footwear.length ? footwear[combinationIndex % footwear.length] : undefined;
+      const hat = headwear.length && combinationIndex % 2 === 0 ? headwear[combinationIndex % headwear.length] : undefined;
+      const accessory = accessories.length ? accessories[combinationIndex % accessories.length] : undefined;
+      if (shoe) selected.push(shoe);
+      if (hat) selected.push(hat);
+      if (accessory) selected.push(accessory);
+
+      const garmentIds = unique(selected.map((item) => item.id));
+      const signature = signatureFor(garmentIds);
+      if (!existingSignatures.has(signature)) {
+        const occasion = occasionFor(selected, combinationIndex);
+        const affinity = personalStyleAffinity(selected, styleReferences);
+        const pieces = [onePiece.name, layer?.name, shoe?.name, accessory?.name].filter(Boolean);
+        candidates.push({
+          name: `${capitalize(cleanColor(onePiece.color) || onePiece.type)} completo`,
+          occasion,
+          rationale: `${pieces.join(", ")}. La prenda completa crea una silueta limpia sin añadir pantalón.${affinity.matchedSource === "photo" ? " Retoma una fórmula que ya usaste en tus fotos." : affinity.matchedSource === "saved_look" ? " Sigue el estilo de los Looks que ya guardaste." : ""}`,
+          garmentIds,
+          signature,
+          score: 6 + (layer ? compatibilityScore(layer.color, onePiece.color) : 1) + garmentIds.length / 10 + affinity.score,
+        });
+      }
+      combinationIndex += 1;
     }
   }
 
@@ -148,7 +184,8 @@ function personalStyleAffinity(selected: OutfitSuggestionGarment[], references: 
 }
 
 function styleSlot(item: OutfitSuggestionGarment) {
-  if (item.category === "tops" || item.category === "one_piece") return "top";
+  if (item.category === "one_piece") return "one_piece";
+  if (item.category === "tops") return "top";
   if (item.category === "bottoms") return "bottom";
   if (item.category === "layers") return "layer";
   if (isFootwear(item)) return "footwear";
