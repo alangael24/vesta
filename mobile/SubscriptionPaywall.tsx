@@ -28,6 +28,8 @@ const termsUrl = "https://www.apple.com/legal/internet-services/itunes/dev/stdeu
 type Props = {
   visible: boolean;
   onClose: () => void;
+  onStatusChange?: (status: SubscriptionStatus) => void;
+  reason?: "wardrobe" | "try_on" | "looks" | null;
   cloud?: {
     apiUrl: string;
     dispatchToken: string;
@@ -35,13 +37,13 @@ type Props = {
   } | null;
 };
 
-type SubscriptionStatus = {
+export type SubscriptionStatus = {
   active: boolean;
   allowances?: { wardrobeAdditions: number; lookGenerations: number } | null;
   usage?: { wardrobeAdditions: number; lookGenerations: number } | null;
 };
 
-export function SubscriptionPaywall({ visible, onClose, cloud }: Props) {
+export function SubscriptionPaywall({ visible, onClose, onStatusChange, reason, cloud }: Props) {
   const [selectedPlan, setSelectedPlan] = useState<SubscriptionPlanId>("annual");
   const [purchasingProductId, setPurchasingProductId] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
@@ -97,7 +99,11 @@ export function SubscriptionPaywall({ visible, onClose, cloud }: Props) {
         "x-vesta-device-token": cloud.deviceToken,
       },
     }).then(async (response) => {
-      if (response.ok) setServerStatus(await response.json() as SubscriptionStatus);
+      if (response.ok) {
+        const status = await response.json() as SubscriptionStatus;
+        setServerStatus(status);
+        onStatusChange?.(status);
+      }
     }).catch(() => undefined);
   }, [cloud, visible]);
 
@@ -129,7 +135,9 @@ export function SubscriptionPaywall({ visible, onClose, cloud }: Props) {
             body: JSON.stringify({ signedTransaction: lastPurchase.purchaseToken }),
           });
           if (!response.ok) throw new Error("server_subscription_verification_failed");
-          setServerStatus(await response.json() as SubscriptionStatus);
+          const status = await response.json() as SubscriptionStatus;
+          setServerStatus(status);
+          onStatusChange?.(status);
         }
         await finishTransaction({ purchase: lastPurchase, isConsumable: false });
         setHasPremium(true);
@@ -227,6 +235,17 @@ export function SubscriptionPaywall({ visible, onClose, cloud }: Props) {
           </View>
 
           <ScrollView style={styles.body} showsVerticalScrollIndicator={false} contentContainerStyle={styles.bodyContent}>
+            {reason && (
+              <View style={styles.unlockCard}>
+                <Text style={styles.unlockEyebrow}>DESBLOQUEA ESTA FUNCIÓN</Text>
+                <Text style={styles.unlockTitle}>{reason === "wardrobe"
+                  ? "Añade prendas a tu armario"
+                  : reason === "try_on"
+                    ? "Mírate usando este outfit"
+                    : "Crea nuevas fotos para tus Looks"}</Text>
+                <Text style={styles.unlockCopy}>Elige un plan para continuar. Lo que ya guardaste seguirá disponible.</Text>
+              </View>
+            )}
             {hasPremium && (
               <View style={styles.activePill}><View style={styles.activeDot} /><Text style={styles.activeText}>PREMIUM ACTIVO EN ESTE IPHONE</Text></View>
             )}
@@ -324,6 +343,10 @@ const styles = StyleSheet.create({
   segmentTextSelected: { color: "#FFF" },
   body: { flex: 1 },
   bodyContent: { paddingHorizontal: 24, paddingTop: 22, paddingBottom: 24, gap: 16 },
+  unlockCard: { padding: 16, borderWidth: 1, borderColor: "#514892", borderRadius: 17, backgroundColor: "#191727" },
+  unlockEyebrow: { color: "#9B91FF", fontSize: 9, fontWeight: "900", letterSpacing: 1.1 },
+  unlockTitle: { color: ink, fontSize: 18, lineHeight: 23, fontWeight: "800", marginTop: 6 },
+  unlockCopy: { color: muted, fontSize: 11, lineHeight: 16, marginTop: 6 },
   activePill: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 18, backgroundColor: "#17241E" },
   activeDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: "#71B78D" },
   activeText: { color: "#8DD0A6", fontSize: 9, fontWeight: "900", letterSpacing: .7 },

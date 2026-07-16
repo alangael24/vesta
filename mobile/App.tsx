@@ -27,7 +27,7 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { SubscriptionPaywall } from "./SubscriptionPaywall";
+import { SubscriptionPaywall, SubscriptionStatus } from "./SubscriptionPaywall";
 import { PrivacyPolicyModal } from "./PrivacyPolicy";
 
 type ViewName = "closet" | "builder" | "looks" | "calendar";
@@ -78,6 +78,7 @@ type TryOnLayer = {
 };
 
 type TryOnRenderQuality = "low" | "medium";
+type PaywallReason = "wardrobe" | "try_on" | "looks";
 type ProductPlacementHint = "auto" | "head" | "top" | "outer" | "legs" | "feet";
 type AvatarStatusPayload = {
   avatar?: CloudAvatar;
@@ -823,6 +824,8 @@ export default function App() {
   const [deletingOutfitId, setDeletingOutfitId] = useState<string | null>(null);
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const [paywallOpen, setPaywallOpen] = useState(false);
+  const [paywallReason, setPaywallReason] = useState<PaywallReason | null>(null);
+  const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus | null>(null);
   const [avatarOpen, setAvatarOpen] = useState(false);
   const [avatarSelfie, setAvatarSelfie] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [avatarFullBody, setAvatarFullBody] = useState<ImagePicker.ImagePickerAsset | null>(null);
@@ -888,6 +891,17 @@ export default function App() {
 
   function showNotice(title: string, message?: string, tone: AppNotice["tone"] = "info") {
     setNotice({ id: Date.now(), tone, title, message });
+  }
+
+  function openPremium(reason: PaywallReason | null = null) {
+    setPaywallReason(reason);
+    setPaywallOpen(true);
+  }
+
+  function requirePremium(reason: PaywallReason) {
+    if (subscriptionStatus?.active) return true;
+    openPremium(reason);
+    return false;
   }
 
   useEffect(() => {
@@ -1096,12 +1110,21 @@ export default function App() {
       setCalendarEntries([]);
       setCloudAvatar(null);
       setLocalAvatarUri(null);
+      setSubscriptionStatus(null);
       pendingAnalysisOffered.current = false;
       avatarOnboardingOffered.current = false;
       legacyAvatarMigrationStarted.current = false;
       return;
     }
-    Promise.all([loadWardrobe(cloudSession), loadOutfits(cloudSession), loadCalendar(cloudSession), loadAvatar(cloudSession)]).catch(() => undefined);
+    Promise.all([loadWardrobe(cloudSession), loadOutfits(cloudSession), loadCalendar(cloudSession), loadAvatar(cloudSession), loadSubscriptionStatus(cloudSession)]).catch(() => undefined);
+  }, [cloudSession?.apiUrl, cloudSession?.deviceToken]);
+
+  useEffect(() => {
+    if (!cloudSession) return;
+    const listener = AppState.addEventListener("change", (state) => {
+      if (state === "active") loadSubscriptionStatus(cloudSession).catch(() => undefined);
+    });
+    return () => listener.remove();
   }, [cloudSession?.apiUrl, cloudSession?.deviceToken]);
 
   useEffect(() => {
@@ -1219,6 +1242,13 @@ export default function App() {
     } finally {
       setCalendarLoading(false);
     }
+  }
+
+  async function loadSubscriptionStatus(session = cloudSession) {
+    if (!session) return;
+    const response = await cloudFetch(session, "/api/v1/subscription", { method: "GET" });
+    if (!response.ok) return;
+    setSubscriptionStatus(await response.json() as SubscriptionStatus);
   }
 
   function changeCalendarMonth(offset: number) {
@@ -1412,6 +1442,7 @@ export default function App() {
 
   async function generateSavedOutfits() {
     if (!cloudSession || outfitGenerating) return;
+    if (!requirePremium("looks")) return;
     if (!localAvatarUri && !cloudAvatar) {
       showNotice("Crea tu avatar primero", "Solo necesitas una selfie y una foto de cuerpo completo.");
       setAvatarOpen(true);
@@ -1461,6 +1492,7 @@ export default function App() {
 
   async function createOutfitPhotograph(outfit: Outfit) {
     if (!cloudSession || outfitGenerating) return;
+    if (!requirePremium("looks")) return;
     if (!localAvatarUri && !cloudAvatar) {
       setSelectedOutfit(null);
       setAvatarOpen(true);
@@ -1521,7 +1553,7 @@ export default function App() {
     });
     const initial = await response.json() as { status?: string; renderPath?: string; error?: string };
     if (!response.ok && response.status !== 202) {
-      if (response.status === 402 || response.status === 429) setPaywallOpen(true);
+      if (response.status === 402 || response.status === 429) openPremium("try_on");
       throw new Error(initial.error || `outfit_generate_${response.status}`);
     }
 
@@ -1579,6 +1611,10 @@ export default function App() {
   }
 
   const pickPhotos = async () => {
+    if (!requirePremium("wardrobe")) {
+      setImportOpen(false);
+      return;
+    }
     setPicking(true);
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -1918,6 +1954,10 @@ export default function App() {
 
   const importProductFromUrl = async () => {
     if (productImporting) return;
+    if (!requirePremium("wardrobe")) {
+      setLinkImportOpen(false);
+      return;
+    }
     if (!cloudSession) {
       showNotice("Preparando tu cuenta", "La importación comenzará cuando termine la conexión privada.");
       return;
@@ -2329,6 +2369,10 @@ export default function App() {
 
   const addToTryOn = (item: WardrobeItem) => {
     if (tryOnRendering) return;
+    if (!requirePremium("try_on")) {
+      setSelectedItem(null);
+      return;
+    }
     if (!cloudSession || !item.imagePath || item.imageKind !== "cutout") {
       showNotice("Imagen pendiente", "Prepara el recorte de esta prenda antes de usarla en tu avatar.");
       return;
@@ -2416,6 +2460,7 @@ export default function App() {
 
   const generateTryOnOutfit = () => {
     if (tryOnRendering || !tryOnLayers.length) return;
+    if (!requirePremium("try_on")) return;
     if (!localAvatarUri && !cloudAvatar) {
       showNotice("Crea tu avatar primero", "Después podrás usarlo con todas tus prendas sin volver a configurarlo.");
       setAvatarOpen(true);
@@ -2426,10 +2471,15 @@ export default function App() {
 
   const improveTryOnQuality = () => {
     if (tryOnRendering || !tryOnLayers.length) return;
+    if (!requirePremium("try_on")) return;
     renderRealTryOn(tryOnLayers, tryOnLayers, "medium").catch(() => undefined);
   };
 
   const trySavedOutfit = (outfit: Outfit) => {
+    if (!requirePremium("try_on")) {
+      setSelectedOutfit(null);
+      return;
+    }
     const readyPieces = outfit.pieces.filter((piece) => piece.imagePath && piece.imageKind === "cutout");
     if (!readyPieces.length) {
       showNotice("Prendas pendientes", "Prepara las imágenes restantes antes de abrir este Look.");
@@ -2500,7 +2550,7 @@ export default function App() {
                     <Text style={styles.eyebrow}>TU ARMARIO PRIVADO</Text>
                     <Text style={styles.pageTitle}>Armario <Text style={styles.count}>{activeWardrobe.length}</Text></Text>
                   </View>
-                  <Pressable style={styles.importButton} onPress={() => setImportOpen(true)}>
+                  <Pressable style={styles.importButton} onPress={() => requirePremium("wardrobe") && setImportOpen(true)}>
                     <Text style={styles.importButtonText}>＋ Importar</Text>
                   </Pressable>
                 </View>
@@ -2508,7 +2558,7 @@ export default function App() {
                   <Pressable
                     style={[styles.batchBanner, importStage === "error" && styles.batchBannerError]}
                     onPress={() => {
-                      if (importStage === "error" && pendingImport) setImportOpen(true);
+                      if (importStage === "error" && pendingImport && requirePremium("wardrobe")) setImportOpen(true);
                       else if (importStage === "complete") setImportStage("idle");
                     }}
                     disabled={!((importStage === "error" && pendingImport) || importStage === "complete")}
@@ -2579,7 +2629,7 @@ export default function App() {
 
             <Pressable
               style={[styles.webTryOnBanner, tryOnRendering && styles.disabledButton]}
-              onPress={() => setLinkImportOpen(true)}
+              onPress={() => requirePremium("wardrobe") && setLinkImportOpen(true)}
               disabled={tryOnRendering}
             >
               <View style={styles.webTryOnIcon}><Text style={styles.webTryOnIconText}>↗</Text></View>
@@ -2974,7 +3024,7 @@ export default function App() {
               <Text style={styles.modalIntro}>{cloudSession
                 ? "Tu avatar, armario y Looks están sincronizados automáticamente y protegidos por tu cuenta."
                 : "Continúa una sola vez para crear tu espacio privado y sincronizarlo en este iPhone."}</Text>
-              {cloudSession && <Pressable style={styles.premiumCard} onPress={() => { setProfileOpen(false); setPaywallOpen(true); }}>
+              {cloudSession && <Pressable style={styles.premiumCard} onPress={() => { setProfileOpen(false); openPremium(null); }}>
                 <View style={styles.premiumCardIcon}><Text style={styles.premiumCardIconText}>OC</Text></View>
                 <View style={styles.premiumCardCopy}>
                   <Text style={styles.premiumCardEyebrow}>OUTFIT CLUB PREMIUM</Text>
@@ -3027,7 +3077,13 @@ export default function App() {
         </View>
       </Modal>
 
-      <SubscriptionPaywall visible={paywallOpen} onClose={() => setPaywallOpen(false)} cloud={cloudSession} />
+      <SubscriptionPaywall
+        visible={paywallOpen}
+        reason={paywallReason}
+        onClose={() => { setPaywallOpen(false); setPaywallReason(null); }}
+        onStatusChange={setSubscriptionStatus}
+        cloud={cloudSession}
+      />
       <PrivacyPolicyModal visible={privacyOpen} onClose={() => setPrivacyOpen(false)} />
 
       <Modal visible={avatarOpen} transparent animationType="slide" onRequestClose={() => setAvatarOpen(false)}>
