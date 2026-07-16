@@ -24,3 +24,10 @@ test("mobile exposes scheduling from Looks and a calendar view", () => {
   assert.match(mobile, /view === "calendar"/u);
   assert.match(mobile, /No consume una generación adicional/u);
 });
+
+test("calendar scheduling has quick dates and direct selection from the agenda", () => {
+  assert.match(mobile, /calendarQuickDates/u);
+  assert.match(mobile, /Toca un día y queda listo/u);
+  assert.match(mobile, /saveCalendarEntry\(calendarSelectedDate, outfit\)/u);
+  assert.doesNotMatch(mobile, /setView\("calendar"\);\s*showNotice\("Look programado"/u);
+});

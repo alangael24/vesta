@@ -739,6 +739,19 @@ function calendarDateLabel(value: string) {
   return `${date.getDate()} de ${calendarMonthNames[date.getMonth()].toLowerCase()}`;
 }
 
+function calendarQuickDates() {
+  const today = new Date();
+  return Array.from({ length: 7 }, (_, offset) => {
+    const date = new Date(today.getFullYear(), today.getMonth(), today.getDate() + offset);
+    const weekday = date.toLocaleDateString("es-MX", { weekday: "short" }).replace(".", "");
+    return {
+      date: calendarDateKey(date),
+      label: offset === 0 ? "Hoy" : offset === 1 ? "Mañana" : weekday.charAt(0).toUpperCase() + weekday.slice(1),
+      day: String(date.getDate()),
+    };
+  });
+}
+
 function CalendarMonthGrid({
   month,
   selectedDate,
@@ -846,6 +859,8 @@ export default function App() {
   });
   const [calendarPickerOpen, setCalendarPickerOpen] = useState(false);
   const [schedulingOutfit, setSchedulingOutfit] = useState<Outfit | null>(null);
+  const [calendarCustomDateOpen, setCalendarCustomDateOpen] = useState(false);
+  const [calendarReturnToOutfit, setCalendarReturnToOutfit] = useState(false);
   const [calendarSaving, setCalendarSaving] = useState(false);
   const [outfitGenerating, setOutfitGenerating] = useState(false);
   const [outfitGenerationProgress, setOutfitGenerationProgress] = useState<{ current: number; total: number } | null>(null);
@@ -916,6 +931,7 @@ export default function App() {
     () => calendarEntries.filter((entry) => entry.scheduledDate === calendarSelectedDate),
     [calendarEntries, calendarSelectedDate],
   );
+  const quickCalendarDates = calendarQuickDates();
 
   async function redeemPairingUrl(url: string) {
     let parsed: URL;
@@ -1219,29 +1235,57 @@ export default function App() {
     const selected = calendarDateFromKey(date);
     setCalendarSelectedDate(date);
     setCalendarMonth(new Date(selected.getFullYear(), selected.getMonth(), 1));
+    setCalendarReturnToOutfit(selectedOutfit?.id === outfit.id);
     setSelectedOutfit(null);
     setCalendarPickerOpen(false);
+    setCalendarCustomDateOpen(false);
     setSchedulingOutfit(outfit);
   }
 
-  async function saveCalendarEntry() {
-    if (!cloudSession || !schedulingOutfit || calendarSaving) return;
+  function closeCalendarScheduler(restoreOutfit = true) {
+    const outfit = schedulingOutfit;
+    setSchedulingOutfit(null);
+    setCalendarCustomDateOpen(false);
+    if (restoreOutfit && calendarReturnToOutfit && outfit) setSelectedOutfit(outfit);
+    setCalendarReturnToOutfit(false);
+  }
+
+  async function saveCalendarEntry(date = calendarSelectedDate, outfit = schedulingOutfit) {
+    if (!cloudSession || !outfit || calendarSaving) return;
+    if (calendarEntries.some((entry) => entry.outfitId === outfit.id && entry.scheduledDate === date)) {
+      setCalendarPickerOpen(false);
+      closeCalendarScheduler();
+      showNotice("Ya estaba programado", `${outfit.name} · ${calendarDateLabel(date)}`, "info");
+      return;
+    }
+
+    const previousEntries = calendarEntries;
+    const optimisticId = `pending-${outfit.id}-${date}`;
+    const selected = calendarDateFromKey(date);
+    setCalendarSelectedDate(date);
+    setCalendarMonth(new Date(selected.getFullYear(), selected.getMonth(), 1));
+    setCalendarEntries((current) => [...current, {
+      id: optimisticId,
+      outfitId: outfit.id,
+      scheduledDate: date,
+      createdAt: new Date().toISOString(),
+    }]);
+    setCalendarPickerOpen(false);
+    closeCalendarScheduler();
     setCalendarSaving(true);
     try {
       const response = await cloudFetch(cloudSession, "/api/v1/calendar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ outfitId: schedulingOutfit.id, scheduledDate: calendarSelectedDate }),
+        body: JSON.stringify({ outfitId: outfit.id, scheduledDate: date }),
       });
       const result = await response.json() as { entries?: CalendarEntry[]; error?: string };
       if (!response.ok) throw new Error(result.error || "calendar_save_failed");
-      setCalendarEntries(Array.isArray(result.entries) ? result.entries : calendarEntries);
-      const outfitName = schedulingOutfit.name;
-      setSchedulingOutfit(null);
-      setView("calendar");
-      showNotice("Look programado", `${outfitName} · ${calendarDateLabel(calendarSelectedDate)}`, "success");
+      setCalendarEntries(Array.isArray(result.entries) ? result.entries : previousEntries);
+      showNotice("Look programado", `${outfit.name} · ${calendarDateLabel(date)}`, "success");
     } catch {
-      showNotice("No se agregó al calendario", "Comprueba tu conexión e inténtalo nuevamente.", "error");
+      setCalendarEntries(previousEntries);
+      showNotice("No se agregó al calendario", "Toca de nuevo cuando recuperes conexión.", "error");
     } finally {
       setCalendarSaving(false);
     }
@@ -3211,17 +3255,17 @@ export default function App() {
             <Pressable style={styles.closeButton} onPress={() => setCalendarPickerOpen(false)}><Text style={styles.closeText}>×</Text></Pressable>
             <Text style={styles.eyebrow}>LOOKS GUARDADOS</Text>
             <Text style={styles.calendarPickerTitle}>¿Qué quieres usar?</Text>
-            <Text style={styles.calendarPickerIntro}>Elige un Look y después confirma la fecha.</Text>
+            <Text style={styles.calendarPickerIntro}>Se agregará al {calendarDateLabel(calendarSelectedDate)} con un solo toque.</Text>
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.calendarPickerList}>
               {outfits.map((outfit) => (
-                <Pressable key={outfit.id} style={styles.calendarPickerCard} onPress={() => openCalendarForOutfit(outfit)}>
+                <Pressable key={outfit.id} style={[styles.calendarPickerCard, calendarSaving && styles.disabledButton]} onPress={() => saveCalendarEntry(calendarSelectedDate, outfit)} disabled={calendarSaving}>
                   <View style={styles.calendarPickerThumb}><OutfitVisual outfit={outfit} session={cloudSession} localPieceImages={localWardrobeImages} /></View>
                   <View style={styles.calendarPickerCopy}>
                     <Text style={styles.calendarAgendaEyebrow}>{outfit.occasion.toUpperCase()}</Text>
                     <Text style={styles.calendarAgendaName}>{outfit.name}</Text>
                     <Text style={styles.calendarAgendaMeta}>{outfit.pieces.length} prendas</Text>
                   </View>
-                  <Text style={styles.calendarPickerArrow}>›</Text>
+                  <Text style={styles.calendarPickerArrow}>＋</Text>
                 </Pressable>
               ))}
             </ScrollView>
@@ -3229,24 +3273,41 @@ export default function App() {
         </View>
       </Modal>
 
-      <Modal visible={Boolean(schedulingOutfit)} transparent animationType="slide" onRequestClose={() => setSchedulingOutfit(null)}>
+      <Modal visible={Boolean(schedulingOutfit)} transparent animationType="slide" onRequestClose={() => closeCalendarScheduler()}>
         <View style={styles.modalBackdrop}>
           <View style={styles.calendarScheduleSheet}>
-            <Pressable style={styles.closeButton} onPress={() => setSchedulingOutfit(null)}><Text style={styles.closeText}>×</Text></Pressable>
+            <Pressable style={styles.closeButton} onPress={() => closeCalendarScheduler()}><Text style={styles.closeText}>×</Text></Pressable>
             <Text style={styles.eyebrow}>PROGRAMAR LOOK</Text>
             <Text style={styles.calendarPickerTitle}>{schedulingOutfit?.name}</Text>
-            <Text style={styles.calendarPickerIntro}>Selecciona el día en que quieres usarlo.</Text>
-            <CalendarMonthGrid
-              month={calendarMonth}
-              selectedDate={calendarSelectedDate}
-              counts={calendarCounts}
-              onChangeMonth={changeCalendarMonth}
-              onSelectDate={setCalendarSelectedDate}
-            />
-            <Pressable style={[styles.fullButton, styles.calendarSaveButton, calendarSaving && styles.disabledButton]} onPress={saveCalendarEntry} disabled={calendarSaving}>
-              {calendarSaving ? <ActivityIndicator color={paper} /> : <Text style={styles.fullButtonText}>Guardar para el {calendarDateLabel(calendarSelectedDate)}</Text>}
-            </Pressable>
-            <Text style={styles.calendarSaveHint}>Puedes programar varios Looks el mismo día y quitarlos después sin borrar el outfit.</Text>
+            <Text style={styles.calendarPickerIntro}>{calendarCustomDateOpen ? "Elige cualquier fecha." : "Toca un día y queda listo."}</Text>
+            {calendarCustomDateOpen ? (
+              <>
+                <CalendarMonthGrid
+                  month={calendarMonth}
+                  selectedDate={calendarSelectedDate}
+                  counts={calendarCounts}
+                  onChangeMonth={changeCalendarMonth}
+                  onSelectDate={setCalendarSelectedDate}
+                />
+                <Pressable style={[styles.fullButton, styles.calendarSaveButton, calendarSaving && styles.disabledButton]} onPress={() => saveCalendarEntry()} disabled={calendarSaving}>
+                  {calendarSaving ? <ActivityIndicator color={paper} /> : <Text style={styles.fullButtonText}>Guardar para el {calendarDateLabel(calendarSelectedDate)}</Text>}
+                </Pressable>
+                <Pressable style={styles.calendarBackToQuick} onPress={() => setCalendarCustomDateOpen(false)}><Text style={styles.calendarBackToQuickText}>Ver fechas rápidas</Text></Pressable>
+              </>
+            ) : (
+              <>
+                <View style={styles.calendarQuickGrid}>
+                  {quickCalendarDates.map((option) => (
+                    <Pressable key={option.date} style={[styles.calendarQuickDate, calendarSaving && styles.disabledButton]} onPress={() => saveCalendarEntry(option.date)} disabled={calendarSaving}>
+                      <Text style={styles.calendarQuickLabel}>{option.label}</Text>
+                      <Text style={styles.calendarQuickDay}>{option.day}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <Pressable style={styles.secondaryButton} onPress={() => setCalendarCustomDateOpen(true)}><Text style={styles.secondaryButtonText}>Otra fecha</Text></Pressable>
+              </>
+            )}
+            <Text style={styles.calendarSaveHint}>No consume otra generación y puedes cambiarlo después.</Text>
           </View>
         </View>
       </Modal>
@@ -3482,6 +3543,12 @@ const styles = StyleSheet.create({
   calendarPickerArrow: { color: rust, fontSize: 26, fontWeight: "300", paddingHorizontal: 12 },
   calendarSaveButton: { marginTop: 14, backgroundColor: rust },
   calendarSaveHint: { color: muted, fontSize: 7, lineHeight: 11, textAlign: "center", marginTop: 10 },
+  calendarQuickGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 14 },
+  calendarQuickDate: { width: "22.5%", minHeight: 72, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: line, borderRadius: 15, backgroundColor: "#F8F5ED" },
+  calendarQuickLabel: { color: muted, fontSize: 7, fontWeight: "800", textTransform: "uppercase" },
+  calendarQuickDay: { color: ink, fontSize: 22, lineHeight: 27, fontWeight: "700", marginTop: 3, fontFamily: Platform.select({ ios: "Georgia", android: "serif" }) },
+  calendarBackToQuick: { alignItems: "center", paddingVertical: 12 },
+  calendarBackToQuickText: { color: rust, fontSize: 8, fontWeight: "800" },
   outfitPieceList: { marginTop: 12, marginBottom: 14, padding: 12, gap: 5, borderWidth: 1, borderColor: line, borderRadius: 12, backgroundColor: "#F8F5ED" },
   outfitPieceName: { color: ink, fontSize: 9, lineHeight: 14 },
   modalBackdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(22,20,17,.45)" },
