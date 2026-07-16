@@ -377,9 +377,15 @@ function mergeCachedOutfits(values: CloudOutfit[], cachedValues: Outfit[]) {
     const cached = cachedById.get(outfit.id);
     return {
       ...outfit,
-      localRenderUri: cached && cached.renderPath === outfit.renderPath ? cached.localRenderUri : null,
+      localRenderUri: cached && comparableMediaPath(cached.renderPath) === comparableMediaPath(outfit.renderPath)
+        ? cached.localRenderUri
+        : null,
     };
   });
+}
+
+function comparableMediaPath(value?: string | null) {
+  return value?.split("?", 1)[0] || null;
 }
 
 function tryOnSignatureFor(layers: TryOnLayer[]) {
@@ -1033,7 +1039,14 @@ export default function App() {
           try {
             const parsedCache = JSON.parse(await FileSystem.readAsStringAsync(indexPath)) as unknown;
             if (Array.isArray(parsedCache)) {
-              cachedOutfits = parsedCache as Outfit[];
+              cachedOutfits = await Promise.all((parsedCache as Outfit[]).map(async (outfit) => {
+                if (!outfit.renderPath) return outfit;
+                const deterministicPath = outfitCachePath(session, outfit.id);
+                const candidate = outfit.localRenderUri || deterministicPath;
+                if (!candidate) return { ...outfit, localRenderUri: null };
+                const image = await FileSystem.getInfoAsync(candidate).catch(() => null);
+                return { ...outfit, localRenderUri: image?.exists ? candidate : null };
+              }));
               setOutfits(cachedOutfits);
             }
           } catch {
@@ -1046,7 +1059,7 @@ export default function App() {
       if (!response.ok) return;
       const result = await response.json() as { outfits?: CloudOutfit[] };
       const mappedOutfits = mergeCachedOutfits(result.outfits || [], cachedOutfits);
-      setOutfits(mappedOutfits);
+      setOutfits((current) => mergeCachedOutfits(result.outfits || [], [...cachedOutfits, ...current]));
       if (indexPath) {
         await FileSystem.writeAsStringAsync(indexPath, JSON.stringify(mappedOutfits));
       }
@@ -1213,7 +1226,7 @@ export default function App() {
       const result = await response.json() as { outfits?: CloudOutfit[]; created?: number; createdOutfitIds?: string[]; error?: string };
       const mappedOutfits = outfitsForUi(result.outfits || []);
       if (result.outfits) {
-        setOutfits(mappedOutfits);
+        setOutfits((current) => mergeCachedOutfits(result.outfits || [], current));
       }
       if (!response.ok) {
         if (result.error === "outfit_wardrobe_too_small") {
@@ -2087,7 +2100,7 @@ export default function App() {
     const payload = await response.json() as { selectedOutfitId?: string; outfits?: CloudOutfit[]; error?: string };
     if (!response.ok) throw new Error(payload.error || `outfit_save_${response.status}`);
     if (!payload.selectedOutfitId) throw new Error("outfit_save_id_missing");
-    if (payload.outfits) setOutfits(outfitsForUi(payload.outfits));
+    if (payload.outfits) setOutfits((current) => mergeCachedOutfits(payload.outfits || [], current));
     return payload.selectedOutfitId;
   };
 
