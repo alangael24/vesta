@@ -30,7 +30,7 @@ import {
 import { SubscriptionPaywall } from "./SubscriptionPaywall";
 import { PrivacyPolicyModal } from "./PrivacyPolicy";
 
-type ViewName = "closet" | "builder" | "looks";
+type ViewName = "closet" | "builder" | "looks" | "calendar";
 type Category = "all" | "tops" | "layers" | "bottoms" | "accessories";
 type ItemId = number | string;
 
@@ -123,6 +123,14 @@ type CloudAvatar = {
 };
 
 type CloudOutfit = Omit<Outfit, "pieces"> & { pieces: CloudGarment[] };
+
+type CalendarEntry = {
+  id: string;
+  outfitId: string;
+  scheduledDate: string;
+  note?: string | null;
+  createdAt?: string | null;
+};
 
 type ImportStage = "idle" | "waiting" | "staging" | "uploading" | "analyzing" | "complete" | "error";
 type AppNotice = { id: number; tone: "success" | "error" | "info"; title: string; message?: string };
@@ -684,6 +692,80 @@ function formatBytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+const calendarMonthNames = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+const calendarWeekdays = ["L", "M", "M", "J", "V", "S", "D"];
+
+function calendarDateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function calendarDateFromKey(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function calendarDaysForMonth(month: Date) {
+  const year = month.getFullYear();
+  const monthIndex = month.getMonth();
+  const mondayOffset = (new Date(year, monthIndex, 1).getDay() + 6) % 7;
+  const dayCount = new Date(year, monthIndex + 1, 0).getDate();
+  return Array.from({ length: 42 }, (_, index) => {
+    const day = index - mondayOffset + 1;
+    return day >= 1 && day <= dayCount ? new Date(year, monthIndex, day) : null;
+  });
+}
+
+function calendarDateLabel(value: string) {
+  const date = calendarDateFromKey(value);
+  return `${date.getDate()} de ${calendarMonthNames[date.getMonth()].toLowerCase()}`;
+}
+
+function CalendarMonthGrid({
+  month,
+  selectedDate,
+  counts,
+  onChangeMonth,
+  onSelectDate,
+}: {
+  month: Date;
+  selectedDate: string;
+  counts: Map<string, number>;
+  onChangeMonth: (offset: number) => void;
+  onSelectDate: (date: string) => void;
+}) {
+  const today = calendarDateKey(new Date());
+  const days = calendarDaysForMonth(month);
+  return (
+    <View style={styles.calendarPanel}>
+      <View style={styles.calendarMonthHeader}>
+        <Pressable style={styles.calendarArrow} onPress={() => onChangeMonth(-1)} accessibilityLabel="Mes anterior"><Text style={styles.calendarArrowText}>‹</Text></Pressable>
+        <Text style={styles.calendarMonthTitle}>{calendarMonthNames[month.getMonth()]} {month.getFullYear()}</Text>
+        <Pressable style={styles.calendarArrow} onPress={() => onChangeMonth(1)} accessibilityLabel="Mes siguiente"><Text style={styles.calendarArrowText}>›</Text></Pressable>
+      </View>
+      <View style={styles.calendarWeekRow}>
+        {calendarWeekdays.map((weekday, index) => <Text key={`${weekday}-${index}`} style={styles.calendarWeekday}>{weekday}</Text>)}
+      </View>
+      <View style={styles.calendarDaysGrid}>
+        {days.map((date, index) => {
+          if (!date) return <View key={`empty-${index}`} style={styles.calendarDayCell} />;
+          const key = calendarDateKey(date);
+          const count = counts.get(key) || 0;
+          const selected = key === selectedDate;
+          return (
+            <Pressable key={key} style={[styles.calendarDayCell, selected && styles.calendarDayCellSelected]} onPress={() => onSelectDate(key)} accessibilityLabel={`${date.getDate()} de ${calendarMonthNames[date.getMonth()]}`}>
+              <Text style={[styles.calendarDayText, key === today && styles.calendarDayToday, selected && styles.calendarDayTextSelected]}>{date.getDate()}</Text>
+              {count > 0 && <View style={[styles.calendarDot, selected && styles.calendarDotSelected]}><Text style={styles.calendarDotText}>{count > 1 ? count : ""}</Text></View>}
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 function productImportErrorMessage(code: string) {
   if (/invalid_url|unsafe_url/u.test(code)) return "El enlace no es una página pública válida. Revisa que empiece con https://.";
   if (/product_page_blocked/u.test(code)) return "Esa tienda bloqueó la lectura automática. Prueba con el enlace directo de la imagen del producto.";
@@ -736,6 +818,16 @@ export default function App() {
   const [cloudWardrobe, setCloudWardrobe] = useState<WardrobeItem[]>([]);
   const [outfits, setOutfits] = useState<Outfit[]>([]);
   const [outfitsLoading, setOutfitsLoading] = useState(false);
+  const [calendarEntries, setCalendarEntries] = useState<CalendarEntry[]>([]);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+  const [calendarSelectedDate, setCalendarSelectedDate] = useState(() => calendarDateKey(new Date()));
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const today = new Date();
+    return new Date(today.getFullYear(), today.getMonth(), 1);
+  });
+  const [calendarPickerOpen, setCalendarPickerOpen] = useState(false);
+  const [schedulingOutfit, setSchedulingOutfit] = useState<Outfit | null>(null);
+  const [calendarSaving, setCalendarSaving] = useState(false);
   const [outfitGenerating, setOutfitGenerating] = useState(false);
   const [outfitGenerationProgress, setOutfitGenerationProgress] = useState<{ current: number; total: number } | null>(null);
   const [wardrobeLoading, setWardrobeLoading] = useState(false);
@@ -784,6 +876,16 @@ export default function App() {
   const photoBytes = useMemo(
     () => photos.reduce((total, photo) => total + (photo.fileSize ?? 0), 0),
     [photos],
+  );
+  const outfitsById = useMemo(() => new Map(outfits.map((outfit) => [outfit.id, outfit])), [outfits]);
+  const calendarCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const entry of calendarEntries) counts.set(entry.scheduledDate, (counts.get(entry.scheduledDate) || 0) + 1);
+    return counts;
+  }, [calendarEntries]);
+  const selectedCalendarEntries = useMemo(
+    () => calendarEntries.filter((entry) => entry.scheduledDate === calendarSelectedDate),
+    [calendarEntries, calendarSelectedDate],
   );
 
   async function redeemPairingUrl(url: string) {
@@ -946,6 +1048,7 @@ export default function App() {
     if (!cloudSession) {
       setCloudWardrobe([]);
       setOutfits([]);
+      setCalendarEntries([]);
       setCloudAvatar(null);
       setLocalAvatarUri(null);
       pendingAnalysisOffered.current = false;
@@ -953,7 +1056,7 @@ export default function App() {
       legacyAvatarMigrationStarted.current = false;
       return;
     }
-    Promise.all([loadWardrobe(cloudSession), loadOutfits(cloudSession), loadAvatar(cloudSession)]).catch(() => undefined);
+    Promise.all([loadWardrobe(cloudSession), loadOutfits(cloudSession), loadCalendar(cloudSession), loadAvatar(cloudSession)]).catch(() => undefined);
   }, [cloudSession?.apiUrl, cloudSession?.deviceToken]);
 
   useEffect(() => {
@@ -1057,6 +1160,75 @@ export default function App() {
       cacheOutfitRenders(session, mappedOutfits).catch(() => undefined);
     } finally {
       setOutfitsLoading(false);
+    }
+  }
+
+  async function loadCalendar(session = cloudSession) {
+    if (!session) return;
+    setCalendarLoading(true);
+    try {
+      const response = await cloudFetch(session, "/api/v1/calendar", { method: "GET" });
+      if (!response.ok) return;
+      const result = await response.json() as { entries?: CalendarEntry[] };
+      setCalendarEntries(Array.isArray(result.entries) ? result.entries : []);
+    } finally {
+      setCalendarLoading(false);
+    }
+  }
+
+  function changeCalendarMonth(offset: number) {
+    setCalendarMonth((current) => {
+      const next = new Date(current.getFullYear(), current.getMonth() + offset, 1);
+      const selectedDay = calendarDateFromKey(calendarSelectedDate).getDate();
+      const finalDay = Math.min(selectedDay, new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate());
+      setCalendarSelectedDate(calendarDateKey(new Date(next.getFullYear(), next.getMonth(), finalDay)));
+      return next;
+    });
+  }
+
+  function openCalendarForOutfit(outfit: Outfit, date = calendarSelectedDate) {
+    const selected = calendarDateFromKey(date);
+    setCalendarSelectedDate(date);
+    setCalendarMonth(new Date(selected.getFullYear(), selected.getMonth(), 1));
+    setSelectedOutfit(null);
+    setCalendarPickerOpen(false);
+    setSchedulingOutfit(outfit);
+  }
+
+  async function saveCalendarEntry() {
+    if (!cloudSession || !schedulingOutfit || calendarSaving) return;
+    setCalendarSaving(true);
+    try {
+      const response = await cloudFetch(cloudSession, "/api/v1/calendar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ outfitId: schedulingOutfit.id, scheduledDate: calendarSelectedDate }),
+      });
+      const result = await response.json() as { entries?: CalendarEntry[]; error?: string };
+      if (!response.ok) throw new Error(result.error || "calendar_save_failed");
+      setCalendarEntries(Array.isArray(result.entries) ? result.entries : calendarEntries);
+      const outfitName = schedulingOutfit.name;
+      setSchedulingOutfit(null);
+      setView("calendar");
+      showNotice("Look programado", `${outfitName} · ${calendarDateLabel(calendarSelectedDate)}`, "success");
+    } catch {
+      showNotice("No se agregó al calendario", "Comprueba tu conexión e inténtalo nuevamente.", "error");
+    } finally {
+      setCalendarSaving(false);
+    }
+  }
+
+  async function removeCalendarEntry(entry: CalendarEntry) {
+    if (!cloudSession) return;
+    const previous = calendarEntries;
+    setCalendarEntries((current) => current.filter((candidate) => candidate.id !== entry.id));
+    try {
+      const response = await cloudFetch(cloudSession, `/api/v1/calendar/${entry.id}`, { method: "DELETE" });
+      if (!response.ok) throw new Error("calendar_delete_failed");
+      showNotice("Quitado del calendario", undefined, "success");
+    } catch {
+      setCalendarEntries(previous);
+      showNotice("No se pudo quitar", "Comprueba tu conexión e inténtalo otra vez.", "error");
     }
   }
 
@@ -1531,6 +1703,7 @@ export default function App() {
               if (!response.ok) throw new Error("outfit_delete_failed");
               const nextOutfits = outfits.filter((entry) => entry.id !== outfit.id);
               setOutfits(nextOutfits);
+              setCalendarEntries((current) => current.filter((entry) => entry.outfitId !== outfit.id));
               setSelectedOutfit(null);
               const localPath = outfit.localRenderUri || outfitCachePath(cloudSession, outfit.id);
               if (localPath?.startsWith("file:")) {
@@ -1574,6 +1747,7 @@ export default function App() {
               setCloudSession(null);
               setCloudWardrobe([]);
               setOutfits([]);
+              setCalendarEntries([]);
               setCloudAvatar(null);
               setLocalAvatarUri(null);
               setPhotos([]);
@@ -2443,6 +2617,64 @@ export default function App() {
           />
         )}
 
+        {view === "calendar" && (
+          <ScrollView contentContainerStyle={styles.screenContent} showsVerticalScrollIndicator={false}>
+            <View style={styles.headingRow}>
+              <View>
+                <Text style={styles.eyebrow}>PLANEA QUÉ VESTIR</Text>
+                <Text style={styles.pageTitle}>Calendario</Text>
+              </View>
+              <Pressable style={[styles.importButton, !outfits.length && styles.disabledButton]} onPress={() => setCalendarPickerOpen(true)} disabled={!outfits.length}>
+                <Text style={styles.importButtonText}>＋ LOOK</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.looksIntro}>Guarda un outfit en una fecha y vuelve a abrirlo cuando llegue el día. No consume una generación adicional.</Text>
+            <CalendarMonthGrid
+              month={calendarMonth}
+              selectedDate={calendarSelectedDate}
+              counts={calendarCounts}
+              onChangeMonth={changeCalendarMonth}
+              onSelectDate={setCalendarSelectedDate}
+            />
+            <View style={styles.calendarAgendaHeader}>
+              <View>
+                <Text style={styles.eyebrow}>AGENDA</Text>
+                <Text style={styles.calendarSelectedTitle}>{calendarDateLabel(calendarSelectedDate)}</Text>
+              </View>
+              <Text style={styles.calendarAgendaCount}>{selectedCalendarEntries.length} {selectedCalendarEntries.length === 1 ? "Look" : "Looks"}</Text>
+            </View>
+            {calendarLoading && !calendarEntries.length ? (
+              <View style={styles.calendarEmpty}><ActivityIndicator color={rust} /></View>
+            ) : selectedCalendarEntries.length === 0 ? (
+              <Pressable style={styles.calendarEmpty} onPress={() => outfits.length && setCalendarPickerOpen(true)}>
+                <Text style={styles.calendarEmptyIcon}>＋</Text>
+                <Text style={styles.calendarEmptyTitle}>Este día está libre.</Text>
+                <Text style={styles.calendarEmptyCopy}>{outfits.length ? "Toca para elegir un Look guardado." : "Crea un Look y después podrás programarlo aquí."}</Text>
+              </Pressable>
+            ) : (
+              <View style={styles.calendarAgendaList}>
+                {selectedCalendarEntries.map((entry) => {
+                  const outfit = outfitsById.get(entry.outfitId);
+                  if (!outfit) return null;
+                  return (
+                    <View key={entry.id} style={styles.calendarAgendaCard}>
+                      <Pressable style={styles.calendarAgendaOpen} onPress={() => setSelectedOutfit(outfit)}>
+                        <View style={styles.calendarAgendaThumb}><OutfitVisual outfit={outfit} session={cloudSession} localPieceImages={localWardrobeImages} /></View>
+                        <View style={styles.calendarAgendaCopy}>
+                          <Text style={styles.calendarAgendaEyebrow}>{outfit.occasion.toUpperCase()}</Text>
+                          <Text style={styles.calendarAgendaName}>{outfit.name}</Text>
+                          <Text style={styles.calendarAgendaMeta}>{outfit.pieces.length} prendas · abrir Look</Text>
+                        </View>
+                      </Pressable>
+                      <Pressable style={styles.calendarAgendaRemove} onPress={() => removeCalendarEntry(entry)} accessibilityLabel={`Quitar ${outfit.name} del calendario`}><Text style={styles.calendarAgendaRemoveText}>×</Text></Pressable>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+          </ScrollView>
+        )}
+
         <View style={styles.bottomNav}>
           <Pressable style={styles.navItem} onPress={() => setView("closet")}>
             <Text style={[styles.navIcon, view === "closet" && styles.navActive]}>▦</Text><Text style={[styles.navLabel, view === "closet" && styles.navActive]}>Armario</Text>
@@ -2452,6 +2684,9 @@ export default function App() {
           </Pressable>
           <Pressable style={styles.navItem} onPress={() => setView("looks")}>
             <Text style={[styles.navIcon, view === "looks" && styles.navActive]}>▤</Text><Text style={[styles.navLabel, view === "looks" && styles.navActive]}>Looks</Text>
+          </Pressable>
+          <Pressable style={styles.navItem} onPress={() => setView("calendar")}>
+            <Text style={[styles.navIcon, view === "calendar" && styles.navActive]}>□</Text><Text style={[styles.navLabel, view === "calendar" && styles.navActive]}>Calendario</Text>
           </Pressable>
         </View>
 
@@ -2773,6 +3008,9 @@ export default function App() {
                         : "✦ Crear mi foto con este Look"}</Text>
                     </Pressable>
                   )}
+                  <Pressable style={[styles.secondaryButton, styles.calendarDetailButton]} onPress={() => openCalendarForOutfit(selectedOutfit)}>
+                    <Text style={styles.secondaryButtonText}>□ Agregar al calendario</Text>
+                  </Pressable>
                   <Pressable style={styles.fullButton} onPress={() => trySavedOutfit(selectedOutfit)}>
                     <Text style={styles.fullButtonText}>Editar este outfit en el probador</Text>
                   </Pressable>
@@ -2782,6 +3020,52 @@ export default function App() {
                 </View>
               )}
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={calendarPickerOpen} transparent animationType="slide" onRequestClose={() => setCalendarPickerOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.calendarPickerSheet}>
+            <Pressable style={styles.closeButton} onPress={() => setCalendarPickerOpen(false)}><Text style={styles.closeText}>×</Text></Pressable>
+            <Text style={styles.eyebrow}>LOOKS GUARDADOS</Text>
+            <Text style={styles.calendarPickerTitle}>¿Qué quieres usar?</Text>
+            <Text style={styles.calendarPickerIntro}>Elige un Look y después confirma la fecha.</Text>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.calendarPickerList}>
+              {outfits.map((outfit) => (
+                <Pressable key={outfit.id} style={styles.calendarPickerCard} onPress={() => openCalendarForOutfit(outfit)}>
+                  <View style={styles.calendarPickerThumb}><OutfitVisual outfit={outfit} session={cloudSession} localPieceImages={localWardrobeImages} /></View>
+                  <View style={styles.calendarPickerCopy}>
+                    <Text style={styles.calendarAgendaEyebrow}>{outfit.occasion.toUpperCase()}</Text>
+                    <Text style={styles.calendarAgendaName}>{outfit.name}</Text>
+                    <Text style={styles.calendarAgendaMeta}>{outfit.pieces.length} prendas</Text>
+                  </View>
+                  <Text style={styles.calendarPickerArrow}>›</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={Boolean(schedulingOutfit)} transparent animationType="slide" onRequestClose={() => setSchedulingOutfit(null)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.calendarScheduleSheet}>
+            <Pressable style={styles.closeButton} onPress={() => setSchedulingOutfit(null)}><Text style={styles.closeText}>×</Text></Pressable>
+            <Text style={styles.eyebrow}>PROGRAMAR LOOK</Text>
+            <Text style={styles.calendarPickerTitle}>{schedulingOutfit?.name}</Text>
+            <Text style={styles.calendarPickerIntro}>Selecciona el día en que quieres usarlo.</Text>
+            <CalendarMonthGrid
+              month={calendarMonth}
+              selectedDate={calendarSelectedDate}
+              counts={calendarCounts}
+              onChangeMonth={changeCalendarMonth}
+              onSelectDate={setCalendarSelectedDate}
+            />
+            <Pressable style={[styles.fullButton, styles.calendarSaveButton, calendarSaving && styles.disabledButton]} onPress={saveCalendarEntry} disabled={calendarSaving}>
+              {calendarSaving ? <ActivityIndicator color={paper} /> : <Text style={styles.fullButtonText}>Guardar para el {calendarDateLabel(calendarSelectedDate)}</Text>}
+            </Pressable>
+            <Text style={styles.calendarSaveHint}>Puedes programar varios Looks el mismo día y quitarlos después sin borrar el outfit.</Text>
           </View>
         </View>
       </Modal>
@@ -2866,8 +3150,8 @@ const styles = StyleSheet.create({
   selectedDot: { position: "absolute", right: 7, top: 7, width: 20, height: 20, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: ink },
   selectedDotText: { color: paper, fontSize: 9 },
   disabledText: { opacity: 0.4 },
-  bottomNav: { position: "absolute", left: 0, right: 0, bottom: 0, height: 78, paddingBottom: Platform.OS === "ios" ? 8 : 0, flexDirection: "row", justifyContent: "space-around", alignItems: "center", borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: line, backgroundColor: "#F8F5ED" },
-  navItem: { width: 82, alignItems: "center", gap: 3 },
+  bottomNav: { position: "absolute", left: 0, right: 0, bottom: 0, height: 78, paddingBottom: Platform.OS === "ios" ? 8 : 0, flexDirection: "row", justifyContent: "space-evenly", alignItems: "center", borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: line, backgroundColor: "#F8F5ED" },
+  navItem: { width: 68, alignItems: "center", gap: 3 },
   navIcon: { color: muted, fontSize: 18 },
   navLabel: { color: muted, fontSize: 8 },
   navActive: { color: ink, fontWeight: "700" },
@@ -2972,6 +3256,51 @@ const styles = StyleSheet.create({
   lookCard: { flex: 1, marginBottom: 14, backgroundColor: "#EAE5DA" },
   lookCopy: { padding: 10, backgroundColor: "#F8F5ED" },
   lookHoldHint: { color: rust, fontSize: 5.5, fontWeight: "900", letterSpacing: 0.55, marginTop: 7 },
+  calendarPanel: { overflow: "hidden", padding: 10, borderWidth: 1, borderColor: line, borderRadius: 20, backgroundColor: "#F8F5ED" },
+  calendarMonthHeader: { height: 45, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 2 },
+  calendarMonthTitle: { color: ink, fontSize: 15, fontWeight: "800", fontFamily: Platform.select({ ios: "Georgia", android: "serif" }) },
+  calendarArrow: { width: 38, height: 38, alignItems: "center", justifyContent: "center", borderRadius: 19, borderWidth: 1, borderColor: line, backgroundColor: paper },
+  calendarArrowText: { color: ink, fontSize: 27, lineHeight: 29, fontWeight: "300" },
+  calendarWeekRow: { flexDirection: "row", marginTop: 6, marginBottom: 3 },
+  calendarWeekday: { width: "14.285%", color: muted, textAlign: "center", fontSize: 7, fontWeight: "900", letterSpacing: 0.8 },
+  calendarDaysGrid: { flexDirection: "row", flexWrap: "wrap" },
+  calendarDayCell: { width: "14.285%", height: 43, alignItems: "center", justifyContent: "center", borderRadius: 12 },
+  calendarDayCellSelected: { backgroundColor: ink },
+  calendarDayText: { color: ink, fontSize: 10, fontWeight: "600" },
+  calendarDayTextSelected: { color: paper, fontWeight: "900" },
+  calendarDayToday: { color: rust, textDecorationLine: "underline", fontWeight: "900" },
+  calendarDot: { position: "absolute", bottom: 4, minWidth: 5, height: 5, alignItems: "center", justifyContent: "center", borderRadius: 4, backgroundColor: rust },
+  calendarDotSelected: { minWidth: 11, height: 11, bottom: 2, backgroundColor: paper },
+  calendarDotText: { color: ink, fontSize: 6, fontWeight: "900" },
+  calendarAgendaHeader: { flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", marginTop: 24, marginBottom: 12 },
+  calendarSelectedTitle: { color: ink, fontSize: 22, lineHeight: 25, fontFamily: Platform.select({ ios: "Georgia", android: "serif" }) },
+  calendarAgendaCount: { color: muted, fontSize: 8, fontWeight: "700", paddingBottom: 3 },
+  calendarAgendaList: { gap: 9 },
+  calendarAgendaCard: { position: "relative", flexDirection: "row", overflow: "hidden", minHeight: 104, borderWidth: 1, borderColor: line, borderRadius: 16, backgroundColor: "#F8F5ED" },
+  calendarAgendaOpen: { flex: 1, flexDirection: "row", alignItems: "center" },
+  calendarAgendaThumb: { width: 74, alignSelf: "stretch", backgroundColor: "#E9E2D5" },
+  calendarAgendaCopy: { flex: 1, paddingHorizontal: 13, paddingVertical: 12, paddingRight: 35 },
+  calendarAgendaEyebrow: { color: rust, fontSize: 6, fontWeight: "900", letterSpacing: 0.8 },
+  calendarAgendaName: { color: ink, fontSize: 12, lineHeight: 16, fontWeight: "800", marginTop: 5 },
+  calendarAgendaMeta: { color: muted, fontSize: 7, marginTop: 6 },
+  calendarAgendaRemove: { position: "absolute", right: 8, top: 8, width: 27, height: 27, alignItems: "center", justifyContent: "center", borderRadius: 14, backgroundColor: paper },
+  calendarAgendaRemoveText: { color: rust, fontSize: 20, lineHeight: 21, fontWeight: "300" },
+  calendarEmpty: { minHeight: 150, alignItems: "center", justifyContent: "center", padding: 24, borderWidth: 1, borderStyle: "dashed", borderColor: line, borderRadius: 18, backgroundColor: "#F8F5ED" },
+  calendarEmptyIcon: { color: rust, fontSize: 24, fontWeight: "300" },
+  calendarEmptyTitle: { color: ink, fontSize: 14, fontWeight: "800", marginTop: 9 },
+  calendarEmptyCopy: { color: muted, maxWidth: 240, fontSize: 8, lineHeight: 13, textAlign: "center", marginTop: 6 },
+  calendarDetailButton: { marginBottom: 8 },
+  calendarPickerSheet: { maxHeight: "90%", paddingHorizontal: 20, paddingTop: 38, paddingBottom: 24, backgroundColor: paper, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
+  calendarScheduleSheet: { paddingHorizontal: 20, paddingTop: 38, paddingBottom: 26, backgroundColor: paper, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
+  calendarPickerTitle: { color: ink, fontSize: 31, lineHeight: 34, letterSpacing: -1, fontFamily: Platform.select({ ios: "Georgia", android: "serif" }) },
+  calendarPickerIntro: { color: muted, fontSize: 9, lineHeight: 14, marginTop: 8, marginBottom: 16 },
+  calendarPickerList: { gap: 8, paddingBottom: 10 },
+  calendarPickerCard: { minHeight: 95, flexDirection: "row", alignItems: "center", overflow: "hidden", borderWidth: 1, borderColor: line, borderRadius: 15, backgroundColor: "#F8F5ED" },
+  calendarPickerThumb: { width: 68, alignSelf: "stretch", backgroundColor: "#E9E2D5" },
+  calendarPickerCopy: { flex: 1, paddingHorizontal: 12, paddingVertical: 10 },
+  calendarPickerArrow: { color: rust, fontSize: 26, fontWeight: "300", paddingHorizontal: 12 },
+  calendarSaveButton: { marginTop: 14, backgroundColor: rust },
+  calendarSaveHint: { color: muted, fontSize: 7, lineHeight: 11, textAlign: "center", marginTop: 10 },
   outfitPieceList: { marginTop: 12, marginBottom: 14, padding: 12, gap: 5, borderWidth: 1, borderColor: line, borderRadius: 12, backgroundColor: "#F8F5ED" },
   outfitPieceName: { color: ink, fontSize: 9, lineHeight: 14 },
   modalBackdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(22,20,17,.45)" },

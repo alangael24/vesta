@@ -10,11 +10,11 @@ type Props = {
 const sections = [
   {
     title: "1. Datos que tratamos",
-    body: "Podemos tratar el identificador de tu cuenta y dispositivo; las fotos que eliges; tu avatar; imágenes y descripciones de prendas; Looks y preferencias; enlaces públicos de productos que importas; estado y referencias técnicas de suscripciones; y datos técnicos necesarios para seguridad, diagnóstico y funcionamiento.",
+    body: "Podemos tratar el identificador de tu cuenta y dispositivo; las fotos que eliges; tu avatar; imágenes y descripciones de prendas; Looks, fechas que agregas al calendario y preferencias; enlaces públicos de productos que importas; estado y referencias técnicas de suscripciones; y datos técnicos necesarios para seguridad, diagnóstico y funcionamiento.",
   },
   {
     title: "2. Cómo usamos tus datos",
-    body: "Los usamos para crear y sincronizar tu armario privado, detectar prendas, generar imágenes de prueba virtual, guardar Looks, importar productos, restaurar compras, proteger el acceso y resolver errores. No vendemos tus datos ni los usamos para publicidad dirigida.",
+    body: "Los usamos para crear y sincronizar tu armario privado, detectar prendas, generar imágenes de prueba virtual, guardar Looks, programarlos en tu calendario interno, importar productos, restaurar compras, proteger el acceso y resolver errores. No vendemos tus datos ni los usamos para publicidad dirigida.",
   },
   {
     title: "3. Fotos, avatar e inteligencia artificial",

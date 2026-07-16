@@ -167,6 +167,19 @@ export const outfitItems = sqliteTable("outfit_items", {
   position: integer("position").notNull(),
 }, (table) => [primaryKey({ columns: [table.outfitId, table.garmentId] })]);
 
+export const scheduledOutfits = sqliteTable("scheduled_outfits", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  outfitId: text("outfit_id").notNull().references(() => outfits.id, { onDelete: "cascade" }),
+  scheduledDate: text("scheduled_date").notNull(),
+  note: text("note"),
+  createdAt: timestamp(),
+  updatedAt: timestamp(),
+}, (table) => [
+  uniqueIndex("scheduled_outfits_owner_outfit_date_unique").on(table.ownerId, table.outfitId, table.scheduledDate),
+  index("scheduled_outfits_owner_date_idx").on(table.ownerId, table.scheduledDate),
+]);
+
 export const outfitRenderJobs = sqliteTable("outfit_render_jobs", {
   id: text("id").primaryKey(),
   ownerId: text("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),

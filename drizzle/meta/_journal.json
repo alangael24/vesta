@@ -64,6 +64,13 @@
       "when": 1784183666256,
       "tag": "0008_black_thor",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1784185456682,
+      "tag": "0009_boring_speed",
+      "breakpoints": true
     }
   ]
 }
