@@ -726,6 +726,7 @@ function formatBytes(bytes: number) {
 
 const calendarMonthNames = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
 const calendarWeekdays = ["L", "M", "M", "J", "V", "S", "D"];
+const calendarPlannerWeekdays = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 
 function calendarDateKey(date: Date) {
   const year = date.getFullYear();
@@ -753,6 +754,16 @@ function calendarDaysForMonth(month: Date) {
 function calendarDateLabel(value: string) {
   const date = calendarDateFromKey(value);
   return `${date.getDate()} de ${calendarMonthNames[date.getMonth()].toLowerCase()}`;
+}
+
+function calendarLongDateLabel(value: string) {
+  return calendarDateFromKey(value).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long" });
+}
+
+function calendarWeekFor(value: string) {
+  const selected = calendarDateFromKey(value);
+  const sunday = new Date(selected.getFullYear(), selected.getMonth(), selected.getDate() - selected.getDay());
+  return Array.from({ length: 7 }, (_, offset) => new Date(sunday.getFullYear(), sunday.getMonth(), sunday.getDate() + offset));
 }
 
 function calendarQuickDates() {
@@ -889,6 +900,7 @@ export default function App() {
   const [outfitsLoading, setOutfitsLoading] = useState(false);
   const [calendarEntries, setCalendarEntries] = useState<CalendarEntry[]>([]);
   const [calendarLoading, setCalendarLoading] = useState(false);
+  const [calendarMode, setCalendarMode] = useState<"day" | "month">("day");
   const [calendarSelectedDate, setCalendarSelectedDate] = useState(() => calendarDateKey(new Date()));
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const today = new Date();
@@ -2556,7 +2568,7 @@ export default function App() {
             <Text style={styles.noticeClose}>×</Text>
           </Pressable>
         )}
-        <View style={styles.topbar}>
+        {view !== "calendar" && <View style={styles.topbar}>
           <Pressable onPress={() => setView("home")} style={styles.brand} accessibilityLabel="Ir a Home">
             <View style={styles.brandMark}><Text style={styles.brandLetter}>OC</Text></View>
             <Text style={styles.brandName}>OUTFIT CLUB</Text>
@@ -2570,7 +2582,7 @@ export default function App() {
               ? <Image source={avatarDisplaySource} resizeMode="cover" style={styles.avatarThumb} />
               : <Text style={styles.avatarText}>YO</Text>}
           </Pressable>
-        </View>
+        </View>}
 
         {view === "home" && (
           <ScrollView contentContainerStyle={styles.screenContent} showsVerticalScrollIndicator={false}>
@@ -2930,64 +2942,76 @@ export default function App() {
         )}
 
         {view === "calendar" && (
-          <ScrollView contentContainerStyle={styles.screenContent} showsVerticalScrollIndicator={false}>
-            <View style={styles.headingRow}>
-              <View>
-                <Text style={styles.eyebrow}>PLANEA QUÉ VESTIR</Text>
-                <Text style={styles.pageTitle}>Calendario</Text>
-              </View>
-              <Pressable style={[styles.importButton, !outfits.length && styles.disabledButton]} onPress={() => setCalendarPickerOpen(true)} disabled={!outfits.length}>
-                <Text style={styles.importButtonText}>＋ LOOK</Text>
-              </Pressable>
+          <ScrollView contentContainerStyle={styles.plannerScreen} showsVerticalScrollIndicator={false}>
+            <View style={styles.plannerHeader}>
+              <Pressable style={styles.plannerRoundButton} onPress={() => setView("home")} accessibilityLabel="Volver a Home"><Text style={styles.plannerBack}>‹</Text></Pressable>
+              <Text style={styles.plannerTitle}>Planificador</Text>
+              <Pressable style={styles.plannerTodayButton} onPress={() => {
+                const today = new Date();
+                setCalendarSelectedDate(calendarDateKey(today));
+                setCalendarMonth(new Date(today.getFullYear(), today.getMonth(), 1));
+              }}><Text style={styles.plannerTodayText}>Hoy</Text></Pressable>
             </View>
-            <Text style={styles.looksIntro}>Guarda un outfit en una fecha y vuelve a abrirlo cuando llegue el día. No consume una generación adicional.</Text>
-            <CalendarMonthGrid
-              month={calendarMonth}
-              selectedDate={calendarSelectedDate}
-              counts={calendarCounts}
-              onChangeMonth={changeCalendarMonth}
-              onSelectDate={setCalendarSelectedDate}
-            />
-            <View style={styles.calendarAgendaHeader}>
-              <View>
-                <Text style={styles.eyebrow}>AGENDA</Text>
-                <Text style={styles.calendarSelectedTitle}>{calendarDateLabel(calendarSelectedDate)}</Text>
-              </View>
-              <Text style={styles.calendarAgendaCount}>{selectedCalendarEntries.length} {selectedCalendarEntries.length === 1 ? "Look" : "Looks"}</Text>
+            <View style={styles.plannerModeTabs}>
+              <Pressable style={styles.plannerModeTab} onPress={() => setCalendarMode("day")}><Text style={[styles.plannerModeText, calendarMode === "day" && styles.plannerModeTextActive]}>Día</Text>{calendarMode === "day" && <View style={styles.plannerModeIndicator} />}</Pressable>
+              <Pressable style={styles.plannerModeTab} onPress={() => setCalendarMode("month")}><Text style={[styles.plannerModeText, calendarMode === "month" && styles.plannerModeTextActive]}>Mes</Text>{calendarMode === "month" && <View style={styles.plannerModeIndicator} />}</Pressable>
             </View>
-            {calendarLoading && !calendarEntries.length ? (
-              <View style={styles.calendarEmpty}><ActivityIndicator color={rust} /></View>
-            ) : selectedCalendarEntries.length === 0 ? (
-              <Pressable style={styles.calendarEmpty} onPress={() => outfits.length && setCalendarPickerOpen(true)}>
-                <Text style={styles.calendarEmptyIcon}>＋</Text>
-                <Text style={styles.calendarEmptyTitle}>Este día está libre.</Text>
-                <Text style={styles.calendarEmptyCopy}>{outfits.length ? "Toca para elegir un Look guardado." : "Crea un Look y después podrás programarlo aquí."}</Text>
-              </Pressable>
-            ) : (
-              <View style={styles.calendarAgendaList}>
-                {selectedCalendarEntries.map((entry) => {
-                  const outfit = outfitsById.get(entry.outfitId);
-                  if (!outfit) return null;
-                  return (
-                    <View key={entry.id} style={styles.calendarAgendaCard}>
-                      <Pressable style={styles.calendarAgendaOpen} onPress={() => setSelectedOutfit(outfit)}>
-                        <View style={styles.calendarAgendaThumb}><OutfitVisual outfit={outfit} session={cloudSession} localPieceImages={localWardrobeImages} /></View>
-                        <View style={styles.calendarAgendaCopy}>
-                          <Text style={styles.calendarAgendaEyebrow}>{outfit.occasion.toUpperCase()}</Text>
-                          <Text style={styles.calendarAgendaName}>{outfit.name}</Text>
-                          <Text style={styles.calendarAgendaMeta}>{outfit.pieces.length} prendas · abrir Look</Text>
-                        </View>
+
+            {calendarMode === "day" ? (
+              <>
+                <View style={styles.plannerWeekStrip}>
+                  {calendarWeekFor(calendarSelectedDate).map((date) => {
+                    const key = calendarDateKey(date);
+                    const selected = key === calendarSelectedDate;
+                    const hasLook = (calendarCounts.get(key) || 0) > 0;
+                    return (
+                      <Pressable key={key} style={styles.plannerWeekDay} onPress={() => setCalendarSelectedDate(key)}>
+                        <Text style={[styles.plannerWeekdayName, selected && styles.plannerWeekdayNameSelected]}>{calendarPlannerWeekdays[date.getDay()]}</Text>
+                        <View style={[styles.plannerDayNumber, selected && styles.plannerDayNumberSelected]}><Text style={[styles.plannerDayNumberText, selected && styles.plannerDayNumberTextSelected]}>{date.getDate()}</Text></View>
+                        {hasLook && !selected && <View style={styles.plannerScheduledDot} />}
                       </Pressable>
-                      <Pressable style={styles.calendarAgendaRemove} onPress={() => removeCalendarEntry(entry)} accessibilityLabel={`Quitar ${outfit.name} del calendario`}><Text style={styles.calendarAgendaRemoveText}>×</Text></Pressable>
-                    </View>
-                  );
-                })}
+                    );
+                  })}
+                </View>
+                <Text style={styles.plannerSelectedDate}>{calendarLongDateLabel(calendarSelectedDate)}</Text>
+                {calendarLoading && !calendarEntries.length ? (
+                  <View style={styles.plannerOutfitCard}><ActivityIndicator color={ink} /></View>
+                ) : selectedCalendarEntries.length === 0 ? (
+                  <View style={styles.plannerOutfitCard}>
+                    <Pressable style={[styles.plannerAddButton, !outfits.length && styles.disabledButton]} onPress={() => outfits.length ? setCalendarPickerOpen(true) : setView("builder")}>
+                      <Text style={styles.plannerAddButtonText}>＋  {outfits.length ? "Añadir outfit" : "Crear primer outfit"}</Text>
+                    </Pressable>
+                  </View>
+                ) : (
+                  <View style={styles.plannerDayCards}>
+                    {selectedCalendarEntries.map((entry) => {
+                      const outfit = outfitsById.get(entry.outfitId);
+                      if (!outfit) return null;
+                      return (
+                        <View key={entry.id} style={styles.plannerOutfitCard}>
+                          <Pressable style={styles.plannerOutfitOpen} onPress={() => setSelectedOutfit(outfit)}>
+                            <View style={styles.plannerOutfitVisual}><OutfitVisual outfit={outfit} session={cloudSession} localPieceImages={localWardrobeImages} /></View>
+                            <View style={styles.plannerOutfitFooter}><View><Text style={styles.plannerOutfitName}>{outfit.name}</Text><Text style={styles.plannerOutfitMeta}>{outfit.pieces.length} prendas</Text></View><Text style={styles.homeCardArrow}>›</Text></View>
+                          </Pressable>
+                          <Pressable style={styles.plannerRemove} onPress={() => removeCalendarEntry(entry)} accessibilityLabel={`Quitar ${outfit.name} del calendario`}><Text style={styles.plannerRemoveText}>×</Text></Pressable>
+                        </View>
+                      );
+                    })}
+                    <Pressable style={styles.plannerAddAnother} onPress={() => setCalendarPickerOpen(true)}><Text style={styles.plannerAddAnotherText}>＋ Añadir otro outfit</Text></Pressable>
+                  </View>
+                )}
+              </>
+            ) : (
+              <View style={styles.plannerMonthContent}>
+                <CalendarMonthGrid month={calendarMonth} selectedDate={calendarSelectedDate} counts={calendarCounts} onChangeMonth={changeCalendarMonth} onSelectDate={(date) => { setCalendarSelectedDate(date); setCalendarMode("day"); }} />
+                <Text style={styles.plannerMonthHint}>Toca un día para abrir su agenda.</Text>
               </View>
             )}
+            <Text style={styles.plannerCostHint}>No consume una generación adicional.</Text>
           </ScrollView>
         )}
 
-        <View style={styles.bottomNav}>
+        {view !== "calendar" && <View style={styles.bottomNav}>
           <Pressable style={styles.navItem} onPress={() => setView("home")}>
             <Text style={[styles.navIcon, view === "home" && styles.navActive]}>⌂</Text><Text style={[styles.navLabel, view === "home" && styles.navActive]}>Home</Text>
           </Pressable>
@@ -2997,7 +3021,7 @@ export default function App() {
           <Pressable style={styles.navItem} onPress={() => setView("closet")}>
             <Text style={[styles.navIcon, ["profile", "closet", "looks", "wishlist"].includes(view) && styles.navActive]}>○</Text><Text style={[styles.navLabel, ["profile", "closet", "looks", "wishlist"].includes(view) && styles.navActive]}>Perfil</Text>
           </Pressable>
-        </View>
+        </View>}
 
         {wardrobeDrag && cloudSession && wardrobeDrag.item.imagePath && (
           <View
@@ -3761,6 +3785,44 @@ const styles = StyleSheet.create({
   lookCard: { flex: 1, marginBottom: 14, backgroundColor: "#EAE5DA" },
   lookCopy: { padding: 10, backgroundColor: "#F8F5ED" },
   lookHoldHint: { color: rust, fontSize: 5.5, fontWeight: "900", letterSpacing: 0.55, marginTop: 7 },
+  plannerScreen: { paddingBottom: 116 },
+  plannerHeader: { height: 78, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16 },
+  plannerRoundButton: { width: 48, height: 48, alignItems: "center", justifyContent: "center", borderRadius: 24, backgroundColor: "#FAF8F2", shadowColor: "#000", shadowOpacity: .06, shadowRadius: 12, shadowOffset: { width: 0, height: 5 } },
+  plannerBack: { color: ink, fontSize: 34, lineHeight: 36, fontWeight: "300", marginTop: -3 },
+  plannerTitle: { color: ink, fontSize: 16, fontWeight: "900" },
+  plannerTodayButton: { minWidth: 66, height: 48, alignItems: "center", justifyContent: "center", paddingHorizontal: 15, borderRadius: 24, backgroundColor: "#FAF8F2", shadowColor: "#000", shadowOpacity: .06, shadowRadius: 12, shadowOffset: { width: 0, height: 5 } },
+  plannerTodayText: { color: ink, fontSize: 12, fontWeight: "800" },
+  plannerModeTabs: { height: 58, flexDirection: "row", borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line },
+  plannerModeTab: { flex: 1, position: "relative", alignItems: "center", justifyContent: "center" },
+  plannerModeText: { color: "#99938A", fontSize: 13, fontWeight: "700" },
+  plannerModeTextActive: { color: ink, fontWeight: "900" },
+  plannerModeIndicator: { position: "absolute", left: 0, right: 0, bottom: -1, height: 2, backgroundColor: ink },
+  plannerWeekStrip: { height: 86, flexDirection: "row", alignItems: "center", paddingHorizontal: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line },
+  plannerWeekDay: { flex: 1, height: 72, alignItems: "center", justifyContent: "center" },
+  plannerWeekdayName: { color: "#AAA49B", fontSize: 9, fontWeight: "600", marginBottom: 7 },
+  plannerWeekdayNameSelected: { color: ink, fontWeight: "800" },
+  plannerDayNumber: { width: 34, height: 34, alignItems: "center", justifyContent: "center", borderRadius: 17 },
+  plannerDayNumberSelected: { backgroundColor: "#000" },
+  plannerDayNumberText: { color: ink, fontSize: 13, fontWeight: "700" },
+  plannerDayNumberTextSelected: { color: "#FFF" },
+  plannerScheduledDot: { position: "absolute", bottom: 4, width: 4, height: 4, borderRadius: 2, backgroundColor: rust },
+  plannerSelectedDate: { color: ink, fontSize: 15, fontWeight: "900", textAlign: "center", textTransform: "lowercase", paddingVertical: 19 },
+  plannerDayCards: { gap: 14, paddingHorizontal: 16 },
+  plannerOutfitCard: { position: "relative", minHeight: 470, alignItems: "center", justifyContent: "center", overflow: "hidden", marginHorizontal: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: line, borderRadius: 22, backgroundColor: "#FBFAF7", shadowColor: "#000", shadowOpacity: .08, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 6 },
+  plannerAddButton: { paddingHorizontal: 24, paddingVertical: 15, borderRadius: 26, backgroundColor: "#000" },
+  plannerAddButtonText: { color: "#FFF", fontSize: 13, fontWeight: "800" },
+  plannerOutfitOpen: { width: "100%", height: "100%" },
+  plannerOutfitVisual: { flex: 1, minHeight: 390, backgroundColor: "#EEE9DE" },
+  plannerOutfitFooter: { minHeight: 80, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingLeft: 17, backgroundColor: "#FBFAF7" },
+  plannerOutfitName: { color: ink, fontSize: 13, fontWeight: "900" },
+  plannerOutfitMeta: { color: muted, fontSize: 8, marginTop: 4 },
+  plannerRemove: { position: "absolute", right: 12, top: 12, width: 34, height: 34, alignItems: "center", justifyContent: "center", borderRadius: 17, backgroundColor: "rgba(255,255,255,.9)" },
+  plannerRemoveText: { color: ink, fontSize: 21, lineHeight: 22, fontWeight: "300" },
+  plannerAddAnother: { alignItems: "center", paddingVertical: 15, marginHorizontal: 16, borderRadius: 24, backgroundColor: ink },
+  plannerAddAnotherText: { color: paper, fontSize: 10, fontWeight: "800" },
+  plannerMonthContent: { paddingHorizontal: 16, paddingTop: 20 },
+  plannerMonthHint: { color: muted, fontSize: 8, textAlign: "center", marginTop: 12 },
+  plannerCostHint: { color: "#AAA49B", fontSize: 7, textAlign: "center", marginTop: 16 },
   calendarPanel: { overflow: "hidden", padding: 10, borderWidth: 1, borderColor: line, borderRadius: 20, backgroundColor: "#F8F5ED" },
   calendarMonthHeader: { height: 45, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 2 },
   calendarMonthTitle: { color: ink, fontSize: 15, fontWeight: "800", fontFamily: Platform.select({ ios: "Georgia", android: "serif" }) },
