@@ -751,6 +751,14 @@ function calendarDaysForMonth(month: Date) {
   });
 }
 
+function plannerDaysForMonth(month: Date) {
+  const year = month.getFullYear();
+  const monthIndex = month.getMonth();
+  const first = new Date(year, monthIndex, 1);
+  const gridStart = new Date(year, monthIndex, 1 - first.getDay());
+  return Array.from({ length: 42 }, (_, index) => new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + index));
+}
+
 function calendarDateLabel(value: string) {
   const date = calendarDateFromKey(value);
   return `${date.getDate()} de ${calendarMonthNames[date.getMonth()].toLowerCase()}`;
@@ -2954,7 +2962,7 @@ export default function App() {
             </View>
             <View style={styles.plannerModeTabs}>
               <Pressable style={styles.plannerModeTab} onPress={() => setCalendarMode("day")}><Text style={[styles.plannerModeText, calendarMode === "day" && styles.plannerModeTextActive]}>Día</Text>{calendarMode === "day" && <View style={styles.plannerModeIndicator} />}</Pressable>
-              <Pressable style={styles.plannerModeTab} onPress={() => setCalendarMode("month")}><Text style={[styles.plannerModeText, calendarMode === "month" && styles.plannerModeTextActive]}>Mes</Text>{calendarMode === "month" && <View style={styles.plannerModeIndicator} />}</Pressable>
+              <Pressable style={styles.plannerModeTab} onPress={() => { const selected = calendarDateFromKey(calendarSelectedDate); setCalendarMonth(new Date(selected.getFullYear(), selected.getMonth(), 1)); setCalendarMode("month"); }}><Text style={[styles.plannerModeText, calendarMode === "month" && styles.plannerModeTextActive]}>Mes</Text>{calendarMode === "month" && <View style={styles.plannerModeIndicator} />}</Pressable>
             </View>
 
             {calendarMode === "day" ? (
@@ -3003,8 +3011,29 @@ export default function App() {
               </>
             ) : (
               <View style={styles.plannerMonthContent}>
-                <CalendarMonthGrid month={calendarMonth} selectedDate={calendarSelectedDate} counts={calendarCounts} onChangeMonth={changeCalendarMonth} onSelectDate={(date) => { setCalendarSelectedDate(date); setCalendarMode("day"); }} />
-                <Text style={styles.plannerMonthHint}>Toca un día para abrir su agenda.</Text>
+                <View style={styles.plannerMonthHeader}>
+                  <Pressable style={styles.plannerMonthArrow} onPress={() => changeCalendarMonth(-1)} accessibilityLabel="Mes anterior"><Text style={styles.plannerMonthArrowText}>‹</Text></Pressable>
+                  <Text style={styles.plannerMonthTitle}>{calendarMonthNames[calendarMonth.getMonth()]} {calendarMonth.getFullYear()}</Text>
+                  <Pressable style={styles.plannerMonthArrow} onPress={() => changeCalendarMonth(1)} accessibilityLabel="Mes siguiente"><Text style={styles.plannerMonthArrowText}>›</Text></Pressable>
+                </View>
+                <View style={styles.plannerMonthWeekdays}>{calendarPlannerWeekdays.map((weekday) => <Text key={weekday} style={styles.plannerMonthWeekday}>{weekday}</Text>)}</View>
+                <View style={styles.plannerMonthGrid}>
+                  {plannerDaysForMonth(calendarMonth).map((date) => {
+                    const key = calendarDateKey(date);
+                    const outside = date.getMonth() !== calendarMonth.getMonth();
+                    const selected = key === calendarSelectedDate;
+                    const scheduled = calendarCounts.get(key) || 0;
+                    return (
+                      <Pressable key={key} style={styles.plannerMonthDay} onPress={() => { setCalendarSelectedDate(key); setCalendarMode("day"); }}>
+                        <View style={[styles.plannerMonthDateBadge, selected && styles.plannerMonthDateBadgeSelected]}><Text style={[styles.plannerMonthDate, outside && styles.plannerMonthDateOutside, selected && styles.plannerMonthDateSelected]}>{date.getDate()}</Text></View>
+                        <View style={[styles.plannerMonthSlot, outside && styles.plannerMonthSlotOutside, scheduled > 0 && styles.plannerMonthSlotScheduled]}>
+                          <Text style={[styles.plannerMonthSlotText, scheduled > 0 && styles.plannerMonthSlotTextScheduled]}>{scheduled > 0 ? (scheduled > 1 ? String(scheduled) : "✓") : outside ? "" : "＋"}</Text>
+                        </View>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <Text style={styles.plannerMonthHint}>Toca cualquier día para abrirlo y añadir un outfit.</Text>
               </View>
             )}
             <Text style={styles.plannerCostHint}>No consume una generación adicional.</Text>
@@ -3820,7 +3849,25 @@ const styles = StyleSheet.create({
   plannerRemoveText: { color: ink, fontSize: 21, lineHeight: 22, fontWeight: "300" },
   plannerAddAnother: { alignItems: "center", paddingVertical: 15, marginHorizontal: 16, borderRadius: 24, backgroundColor: ink },
   plannerAddAnotherText: { color: paper, fontSize: 10, fontWeight: "800" },
-  plannerMonthContent: { paddingHorizontal: 16, paddingTop: 20 },
+  plannerMonthContent: { paddingHorizontal: 14 },
+  plannerMonthHeader: { height: 52, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  plannerMonthTitle: { color: ink, fontSize: 15, fontWeight: "900" },
+  plannerMonthArrow: { width: 38, height: 38, alignItems: "center", justifyContent: "center", borderRadius: 19 },
+  plannerMonthArrowText: { color: ink, fontSize: 25, lineHeight: 27, fontWeight: "300" },
+  plannerMonthWeekdays: { height: 38, flexDirection: "row", alignItems: "center", borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line },
+  plannerMonthWeekday: { width: "14.285%", color: "#A6AAA9", fontSize: 9, textAlign: "center" },
+  plannerMonthGrid: { flexDirection: "row", flexWrap: "wrap" },
+  plannerMonthDay: { width: "14.285%", height: 105, alignItems: "center", paddingHorizontal: 2, paddingTop: 7, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line },
+  plannerMonthDateBadge: { width: 27, height: 27, alignItems: "center", justifyContent: "center", borderRadius: 14, marginBottom: 4 },
+  plannerMonthDateBadgeSelected: { backgroundColor: "#000" },
+  plannerMonthDate: { color: ink, fontSize: 11, fontWeight: "700" },
+  plannerMonthDateOutside: { color: "#D1CEC8" },
+  plannerMonthDateSelected: { color: "#FFF", fontWeight: "900" },
+  plannerMonthSlot: { flex: 1, width: "100%", alignItems: "center", justifyContent: "center", borderRadius: 7, backgroundColor: "#ECEAE6" },
+  plannerMonthSlotOutside: { backgroundColor: "transparent" },
+  plannerMonthSlotScheduled: { backgroundColor: ink },
+  plannerMonthSlotText: { color: "#6F706E", fontSize: 23, fontWeight: "300" },
+  plannerMonthSlotTextScheduled: { color: paper, fontSize: 13, fontWeight: "900" },
   plannerMonthHint: { color: muted, fontSize: 8, textAlign: "center", marginTop: 12 },
   plannerCostHint: { color: "#AAA49B", fontSize: 7, textAlign: "center", marginTop: 16 },
   calendarPanel: { overflow: "hidden", padding: 10, borderWidth: 1, borderColor: line, borderRadius: 20, backgroundColor: "#F8F5ED" },
