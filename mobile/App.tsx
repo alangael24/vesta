@@ -198,6 +198,7 @@ const TRY_ON_QUEUE_MANIFEST = "vesta-try-on-queue.json";
 const WARDROBE_INDEX_CACHE = "wardrobe.json";
 const IMPORT_UPLOAD_CONCURRENCY = 3;
 const WARDROBE_DOWNLOAD_CONCURRENCY = 4;
+const LOOKS_DOWNLOAD_CONCURRENCY = 4;
 
 function wardrobeIndexCachePath(session: CloudSession) {
   return FileSystem.documentDirectory ? `${FileSystem.documentDirectory}vesta-${accountCachePrefix(session)}-${WARDROBE_INDEX_CACHE}` : null;
@@ -367,6 +368,17 @@ function outfitsForUi(values: CloudOutfit[]) {
     ...outfit,
     pieces: outfit.pieces.map((piece) => ({ ...piece, category: categoryForUi(piece.category) })),
   }));
+}
+
+function mergeCachedOutfits(values: CloudOutfit[], cachedValues: Outfit[]) {
+  const cachedById = new Map(cachedValues.map((outfit) => [outfit.id, outfit]));
+  return outfitsForUi(values).map((outfit) => {
+    const cached = cachedById.get(outfit.id);
+    return {
+      ...outfit,
+      localRenderUri: cached && cached.renderPath === outfit.renderPath ? cached.localRenderUri : null,
+    };
+  });
 }
 
 function tryOnSignatureFor(layers: TryOnLayer[]) {
@@ -970,16 +982,18 @@ export default function App() {
     setOutfitsLoading(true);
     try {
       const indexPath = outfitIndexCachePath(session);
+      let cachedOutfits: Outfit[] = [];
       if (indexPath) {
         const info = await FileSystem.getInfoAsync(indexPath).catch(() => null);
         if (info?.exists) {
           try {
-            const cachedOutfits = JSON.parse(await FileSystem.readAsStringAsync(indexPath)) as Outfit[];
-            if (Array.isArray(cachedOutfits)) {
+            const parsedCache = JSON.parse(await FileSystem.readAsStringAsync(indexPath)) as unknown;
+            if (Array.isArray(parsedCache)) {
+              cachedOutfits = parsedCache as Outfit[];
               setOutfits(cachedOutfits);
-              cacheOutfitRenders(session, cachedOutfits).catch(() => undefined);
             }
           } catch {
+            cachedOutfits = [];
             // A damaged local index never replaces the private cloud source of truth.
           }
         }
@@ -987,7 +1001,7 @@ export default function App() {
       const response = await cloudFetch(session, "/api/v1/outfits", { method: "GET" });
       if (!response.ok) return;
       const result = await response.json() as { outfits?: CloudOutfit[] };
-      const mappedOutfits = outfitsForUi(result.outfits || []);
+      const mappedOutfits = mergeCachedOutfits(result.outfits || [], cachedOutfits);
       setOutfits(mappedOutfits);
       if (indexPath) {
         await FileSystem.writeAsStringAsync(indexPath, JSON.stringify(mappedOutfits));
@@ -1063,23 +1077,36 @@ export default function App() {
   }
 
   async function cacheOutfitRenders(session: CloudSession, values: Outfit[]) {
-    for (const outfit of values.filter((entry) => entry.renderPath)) {
+    const renderedOutfits = values.filter((entry) => entry.renderPath);
+    const nextOutfits = [...values];
+    await runPool(renderedOutfits, LOOKS_DOWNLOAD_CONCURRENCY, async (outfit) => {
       const localPath = outfitCachePath(session, outfit.id);
-      if (!localPath || !outfit.renderPath) continue;
-      const info = await FileSystem.getInfoAsync(localPath).catch(() => null);
+      if (!localPath || !outfit.renderPath) return;
+      let localRenderUri = outfit.localRenderUri;
+      const info = localRenderUri ? await FileSystem.getInfoAsync(localRenderUri).catch(() => null) : null;
       if (!info?.exists) {
+        await FileSystem.deleteAsync(localPath, { idempotent: true }).catch(() => undefined);
         const download = await FileSystem.downloadAsync(`${session.apiUrl}${outfit.renderPath}`, localPath, {
           headers: {
             "OAI-Sites-Authorization": `Bearer ${session.dispatchToken}`,
             "x-vesta-device-token": session.deviceToken,
           },
-          sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
+          sessionType: FileSystem.FileSystemSessionType.BACKGROUND,
         }).catch(() => null);
-        if (!download || download.status < 200 || download.status >= 300) continue;
+        if (!download || download.status < 200 || download.status >= 300) return;
+        localRenderUri = localPath;
       }
-      setOutfits((current) => current.map((entry) => entry.id === outfit.id ? { ...entry, localRenderUri: localPath } : entry));
-      setSelectedOutfit((current) => current?.id === outfit.id ? { ...current, localRenderUri: localPath } : current);
-    }
+      const valueIndex = nextOutfits.findIndex((entry) => entry.id === outfit.id);
+      if (valueIndex >= 0) nextOutfits[valueIndex] = { ...nextOutfits[valueIndex], localRenderUri };
+      setOutfits((current) => current.map((entry) => entry.id === outfit.id && entry.renderPath === outfit.renderPath
+        ? { ...entry, localRenderUri }
+        : entry));
+      setSelectedOutfit((current) => current?.id === outfit.id && current.renderPath === outfit.renderPath
+        ? { ...current, localRenderUri }
+        : current);
+    });
+    const indexPath = outfitIndexCachePath(session);
+    if (indexPath) await FileSystem.writeAsStringAsync(indexPath, JSON.stringify(nextOutfits));
   }
 
   async function accountAvatarBase64() {
