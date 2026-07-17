@@ -79,8 +79,8 @@ export function PrivacyPolicyModal({ visible, onClose }: Props) {
 }
 
 const styles = StyleSheet.create({
-  page: { flex: 1, backgroundColor: "#F3EFE5" },
-  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingTop: 20, paddingBottom: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#D8D1C4" },
+  page: { flex: 1, backgroundColor: "#FFFFFF" },
+  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingTop: 20, paddingBottom: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#E5E5E5" },
   eyebrow: { color: "#A34F31", fontSize: 7, fontWeight: "900", letterSpacing: 1.3 },
   headerTitle: { color: "#211F1B", fontSize: 20, fontWeight: "800", marginTop: 3 },
   closeButton: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,.62)" },
@@ -92,6 +92,6 @@ const styles = StyleSheet.create({
   section: { paddingVertical: 18, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#D8D1C4" },
   sectionTitle: { color: "#211F1B", fontSize: 12, lineHeight: 17, fontWeight: "900" },
   body: { color: "#655F55", fontSize: 10, lineHeight: 17, marginTop: 8 },
-  contactCard: { marginTop: 22, padding: 17, borderRadius: 16, backgroundColor: "#F8F5ED", borderWidth: 1, borderColor: "#D8D1C4" },
+  contactCard: { marginTop: 22, padding: 17, borderRadius: 16, backgroundColor: "#F7F7F7", borderWidth: 1, borderColor: "#E5E5E5" },
   webLink: { color: "#A34F31", fontSize: 9, lineHeight: 14, fontWeight: "900", textDecorationLine: "underline", marginTop: 13 },
 });

@@ -3590,10 +3590,10 @@ export default function App() {
 }
 
 const ink = "#211F1B";
-const paper = "#F3EFE5";
+const paper = "#FFFFFF";
 const rust = "#A34F31";
-const muted = "#777165";
-const line = "#D8D1C4";
+const muted = "#737373";
+const line = "#E5E5E5";
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: paper },
