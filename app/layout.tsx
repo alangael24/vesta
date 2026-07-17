@@ -20,8 +20,8 @@ export async function generateMetadata(): Promise<Metadata> {
   const socialImage = `${protocol}://${host}/og.png`;
 
   return {
-    title: "Vesta — tu armario, mejor combinado",
-    description: "Organiza tu ropa desde tus fotos y descubre nuevos looks con lo que ya tienes.",
+    title: "Vesta — tu armario, entendido",
+    description: "Convierte las prendas que ya tienes en decisiones claras: qué ponerte, por qué funciona y qué merece volver a rotación.",
     manifest: "/manifest.webmanifest",
     applicationName: "Vesta",
     appleWebApp: { capable: true, statusBarStyle: "default", title: "Vesta" },
@@ -34,15 +34,15 @@ export async function generateMetadata(): Promise<Metadata> {
       apple: [{ url: "/icon-192.png", sizes: "192x192", type: "image/png" }],
     },
     openGraph: {
-      title: "Vesta — tu armario, mejor combinado",
-      description: "Organiza tu ropa y descubre nuevos looks con lo que ya tienes.",
+      title: "Vesta — tu armario, entendido",
+      description: "Tu armario convertido en decisiones claras, personales y explicables.",
       type: "website",
-      images: [{ url: socialImage, width: 1200, height: 630, alt: "Vesta, armario inteligente" }],
+      images: [{ url: socialImage, width: 1200, height: 630, alt: "Vesta, inteligencia para tu armario" }],
     },
     twitter: {
       card: "summary_large_image",
-      title: "Vesta — tu armario, mejor combinado",
-      description: "Organiza tu ropa y descubre nuevos looks con lo que ya tienes.",
+      title: "Vesta — tu armario, entendido",
+      description: "Tu armario convertido en decisiones claras, personales y explicables.",
       images: [socialImage],
     },
   };
@@ -53,7 +53,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   viewportFit: "cover",
-  themeColor: "#f3efe5",
+  themeColor: "#f4f0e7",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

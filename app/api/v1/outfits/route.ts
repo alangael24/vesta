@@ -3,7 +3,17 @@ import { getDb } from "@/db";
 import { garmentEvidence, garments, outfitItems, outfits, users } from "@/db/schema";
 import { requireDevice } from "@/lib/device-auth";
 import { parsePiecesSnapshot, snapshotGarment } from "@/lib/outfit-snapshot";
-import { OutfitStyleReference, signatureFor, suggestOutfits } from "@/lib/outfit-suggestions";
+import {
+  type OutfitContext,
+  type OutfitMood,
+  type OutfitStyleReference,
+  type OutfitWeather,
+  signatureFor,
+  suggestOutfits,
+} from "@/lib/outfit-suggestions";
+
+const weatherOptions: OutfitWeather[] = ["calor", "templado", "frío", "lluvia"];
+const moodOptions: OutfitMood[] = ["minimal", "relajado", "pulido", "atrevido"];
 
 export async function GET(request: Request) {
   const identity = await requireDevice(request);
@@ -29,6 +39,7 @@ export async function POST(request: Request) {
     sourceType: garments.sourceType,
     sourceUrl: garments.sourceUrl,
     confidence: garments.confidence,
+    isBasic: garments.isBasic,
     status: garments.status,
     cutoutKey: garments.cutoutKey,
   }).from(garments).where(and(
@@ -99,6 +110,9 @@ export async function POST(request: Request) {
     }, { status: 201, headers: privateHeaders() });
   }
 
+  const context = parseOutfitContext(body, wardrobeById);
+  if (context instanceof Response) return context;
+
   const photoEvidenceRows = await db.select({
     photoId: garmentEvidence.photoId,
     garmentId: garmentEvidence.garmentId,
@@ -115,7 +129,7 @@ export async function POST(request: Request) {
     ...Array.from(garmentsByPhoto.values()).map((ids) => ({ source: "photo" as const, garments: ids.map((id) => wardrobeById.get(id)).filter(Boolean) })),
     ...Array.from(existingByOutfit.values()).map((ids) => ({ source: "saved_look" as const, garments: ids.map((id) => wardrobeById.get(id)).filter(Boolean) })),
   ].filter((reference) => reference.garments.length >= 2) as OutfitStyleReference[];
-  const suggestions = suggestOutfits(wardrobe, count, existingSignatures, styleReferences);
+  const suggestions = suggestOutfits(wardrobe, count, existingSignatures, styleReferences, context);
   if (!suggestions.length) {
     return Response.json({
       error: wardrobe.length < 2 ? "outfit_wardrobe_too_small" : "outfit_combinations_exhausted",
@@ -151,6 +165,7 @@ export async function POST(request: Request) {
     outfits: await listOwnerOutfits(identity.ownerId),
     created: suggestions.length,
     createdOutfitIds,
+    context,
   }, { status: 201, headers: privateHeaders() });
 }
 
@@ -185,6 +200,7 @@ async function listOwnerOutfits(ownerId: string) {
     sourceType: garments.sourceType,
     sourceUrl: garments.sourceUrl,
     confidence: garments.confidence,
+    isBasic: garments.isBasic,
     garmentStatus: garments.status,
     cutoutKey: garments.cutoutKey,
   }).from(outfitItems)
@@ -206,6 +222,7 @@ async function listOwnerOutfits(ownerId: string) {
       sourceType: row.sourceType,
       sourceUrl: row.sourceUrl,
       confidence: row.confidence,
+      isBasic: row.isBasic,
       status: row.garmentStatus,
       imagePath: row.cutoutKey ? `/api/v1/media/garments/${row.garmentId}` : null,
       imageKind: row.cutoutKey ? "cutout" : "evidence",
@@ -244,6 +261,11 @@ type OutfitRequest = {
   name?: unknown;
   occasion?: unknown;
   rationale?: unknown;
+  weather?: unknown;
+  mood?: unknown;
+  seedGarmentIds?: unknown;
+  avoidGarmentIds?: unknown;
+  variationSeed?: unknown;
 };
 
 async function safeJson(request: Request): Promise<OutfitRequest | null> {
@@ -252,6 +274,53 @@ async function safeJson(request: Request): Promise<OutfitRequest | null> {
   } catch {
     return null;
   }
+}
+
+function parseOutfitContext(
+  body: OutfitRequest | null,
+  wardrobeById: Map<string, unknown>,
+): OutfitContext | Response {
+  const seedGarmentIds = cleanIdList(body?.seedGarmentIds, 2);
+  const avoidGarmentIds = cleanIdList(body?.avoidGarmentIds, 12);
+  if (seedGarmentIds === null || avoidGarmentIds === null) {
+    return Response.json({ error: "outfit_context_invalid" }, { status: 400, headers: privateHeaders() });
+  }
+
+  if (seedGarmentIds.some((id) => avoidGarmentIds.includes(id))) {
+    return Response.json({ error: "outfit_context_conflict" }, { status: 400, headers: privateHeaders() });
+  }
+
+  const unavailable = [...seedGarmentIds, ...avoidGarmentIds].filter((id) => !wardrobeById.has(id));
+  if (unavailable.length) {
+    return Response.json({ error: "outfit_context_garment_unavailable", garmentIds: unavailable }, { status: 409, headers: privateHeaders() });
+  }
+
+  if (body?.weather !== undefined && !weatherOptions.includes(body.weather as OutfitWeather)) {
+    return Response.json({ error: "outfit_weather_invalid" }, { status: 400, headers: privateHeaders() });
+  }
+  if (body?.mood !== undefined && !moodOptions.includes(body.mood as OutfitMood)) {
+    return Response.json({ error: "outfit_mood_invalid" }, { status: 400, headers: privateHeaders() });
+  }
+
+  const weather = body?.weather as OutfitWeather | undefined;
+  const mood = body?.mood as OutfitMood | undefined;
+  const variationSeed = Number(body?.variationSeed);
+
+  return {
+    occasion: cleanLabel(body?.occasion, 40) || undefined,
+    weather,
+    mood,
+    seedGarmentIds,
+    avoidGarmentIds,
+    variationSeed: Number.isFinite(variationSeed) ? Math.trunc(variationSeed) : undefined,
+  };
+}
+
+function cleanIdList(value: unknown, maxLength: number) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) return null;
+  const ids = Array.from(new Set(value.filter((id): id is string => typeof id === "string" && id.length > 0)));
+  return ids.length <= maxLength ? ids : null;
 }
 
 function cleanLabel(value: unknown, maxLength: number) {

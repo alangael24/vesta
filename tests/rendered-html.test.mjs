@@ -27,17 +27,24 @@ test("build contains the deployable Worker, private bindings, and migrations", a
   }
 });
 
-test("web panel and native client expose the real privacy workflow", async () => {
-  const [webSource, mobileSource, layoutSource] = await Promise.all([
+test("web studio and native client expose the real privacy workflow", async () => {
+  const [webSource, mirrorSource, mobileSource, layoutSource, outfitRouteSource] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/components/VestaMirror.tsx", root), "utf8"),
     readFile(new URL("mobile/App.tsx", root), "utf8"),
     readFile(new URL("app/layout.tsx", root), "utf8"),
+    readFile(new URL("app/api/v1/outfits/route.ts", root), "utf8"),
   ]);
 
-  assert.match(layoutSource, /Vesta — tu armario, mejor combinado/i);
+  assert.match(layoutSource, /Vesta — tu armario, entendido/i);
   assert.match(webSource, /Colección de muestra/i);
+  assert.match(webSource, /Vesta Studio/i);
+  assert.match(webSource, /summarizeWardrobe/i);
   assert.match(webSource, /No necesitas emparejar nada/i);
   assert.match(webSource, /R2 privado/i);
+  assert.match(mirrorSource, /No simula talla ni caída física/i);
+  assert.match(outfitRouteSource, /parseOutfitContext/i);
+  assert.match(outfitRouteSource, /seedGarmentIds/i);
   assert.doesNotMatch(webSource, /6 prendas detectadas|4 looks nuevos listos|Usar fotos de ejemplo/i);
 
   assert.match(mobileSource, /launchImageLibraryAsync/);
