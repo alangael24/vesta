@@ -39,7 +39,7 @@ Image 1 is the primary facial identity reference. Image 2 is the primary body-sh
 
 Preserve the person's recognizable identity, facial geometry, hair, skin tone, body shape, natural proportions, and visible physical characteristics. Do not beautify, slim, enlarge muscles, change age, change ethnicity, or stylize the person. Create a neutral front-facing standing pose with the head level, arms relaxed and slightly separated from the torso, hands visible, legs naturally separated, and both feet fully visible.
 
-Dress the person in unbranded neutral fitting clothes intended to be replaced later: a plain fitted charcoal short-sleeve T-shirt, straight black pants, and simple neutral shoes. Use a perfectly clean warm off-white studio background with soft even lighting. Remove phones, mirrors, furniture, bathroom details, text, logos, jewelry, bags, hats, and unrelated objects. Output one centered vertical full-body portrait only. This is a reusable identity-preserving base for virtual try-on, not a fashion look.`;
+Dress the person in unbranded neutral fitting clothes intended to be replaced later: a plain fitted charcoal short-sleeve T-shirt, straight black pants, and simple neutral shoes. Use a perfectly flat pure white RGB 255,255,255 studio background, edge to edge, with soft even lighting and no warm tint, gradient, texture, horizon, floor seam, or vignette. Remove phones, mirrors, furniture, bathroom details, text, logos, jewelry, bags, hats, and unrelated objects. Output one centered vertical full-body portrait only. This is a reusable identity-preserving base for virtual try-on, not a fashion look.`;
 
 export class AvatarGenerationError extends Error {
   constructor(public readonly code: string, message: string) {

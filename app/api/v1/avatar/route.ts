@@ -6,6 +6,7 @@ import { AvatarGenerationError, generateCanonicalAvatar } from "@/lib/avatar-gen
 import { needsLegacyAvatarRestore } from "@/lib/avatar-migration";
 import { requireDevice } from "@/lib/device-auth";
 import { getMediaBucket, ownerAvatarKey } from "@/lib/storage";
+import { normalizeAvatarBackground } from "@/lib/avatar-background";
 
 const maximumAvatarBytes = 15 * 1024 * 1024;
 const maximumReferenceBytes = 8 * 1024 * 1024;
@@ -60,9 +61,10 @@ export async function PUT(request: Request) {
 
   const version = crypto.randomUUID();
   const key = ownerAvatarKey(identity.ownerId, version);
-  await getMediaBucket().put(key, bytes, {
+  const normalized = normalizeAvatarBackground(bytes);
+  await getMediaBucket().put(key, normalized.png, {
     httpMetadata: { contentType: "image/png" },
-    customMetadata: { ownerId: identity.ownerId, version, purpose: "private-canonical-fitting-avatar" },
+    customMetadata: { ownerId: identity.ownerId, version, purpose: "private-canonical-fitting-avatar", background: normalized.applied ? "white" : "source" },
   });
   const now = new Date().toISOString();
   await db.update(users).set({
@@ -174,9 +176,10 @@ async function saveAvatar(ownerId: string, bytes: Uint8Array) {
 
   const version = crypto.randomUUID();
   const key = ownerAvatarKey(ownerId, version);
-  await getMediaBucket().put(key, bytes, {
+  const normalized = normalizeAvatarBackground(bytes);
+  await getMediaBucket().put(key, normalized.png, {
     httpMetadata: { contentType: "image/png" },
-    customMetadata: { ownerId, version, purpose: "private-canonical-fitting-avatar" },
+    customMetadata: { ownerId, version, purpose: "private-canonical-fitting-avatar", background: "white" },
   });
   const [stillOwned] = await db.select({ id: users.id }).from(users).where(eq(users.id, ownerId)).limit(1);
   if (!stillOwned) {

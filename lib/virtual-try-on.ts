@@ -4,6 +4,7 @@ import { garments, outfitItems, outfits, users } from "@/db/schema";
 import { base64ToBytes, getOpenAIKey } from "@/lib/openai";
 import { snapshotGarment } from "@/lib/outfit-snapshot";
 import { getMediaBucket, outfitRenderKey } from "@/lib/storage";
+import { normalizeAvatarBackground } from "@/lib/avatar-background";
 
 export type TryOnQuality = "low" | "medium";
 
@@ -97,9 +98,10 @@ export async function generateVirtualTryOn(ownerId: string, outfitId: string, qu
     eq(outfits.ownerId, ownerId),
   )).limit(1);
   if (!stillOwned) throw new VirtualTryOnError("outfit_deleted", "The outfit was removed while its render was running.");
-  await bucket.put(key, base64ToBytes(encoded), {
+  const normalized = normalizeAvatarBackground(base64ToBytes(encoded));
+  await bucket.put(key, normalized.png, {
     httpMetadata: { contentType: "image/png" },
-    customMetadata: { ownerId, outfitId, purpose: "private-virtual-try-on-render" },
+    customMetadata: { ownerId, outfitId, purpose: "private-virtual-try-on-render", background: "white" },
   });
   const now = new Date().toISOString();
   await db.update(outfits).set({
@@ -146,7 +148,7 @@ ${garmentList}
 
 Create one full-body fashion fitting photograph in which the person from Image 1 is genuinely wearing every referenced garment in its specified anatomical placement. This is an image edit, never a collage or overlay. Make fabric wrap around the body with realistic drape, folds, openings, scale, perspective, occlusion, and contact shadows. Replace neutral base clothes only in selected regions and keep neutral base clothing elsewhere.
 
-Preserve the person's identity, face, hair, skin tone, body shape, proportions, pose, hands, feet, camera angle, framing, lighting, and warm solid background from Image 1. Preserve each garment's real color, silhouette, material, graphics, logos, patterns, trim, pockets, and construction exactly as supported by its reference. Do not invent branding or details. Do not show floating garments, product cutouts, mannequins, hangers, phones, text, extra people, extra limbs, or extra objects. Output only the finished portrait.`;
+Preserve the person's identity, face, hair, skin tone, body shape, proportions, pose, hands, feet, camera angle, framing, and lighting from Image 1. Replace the background with perfectly flat pure white RGB 255,255,255, edge to edge, with no warm tint, gradient, texture, horizon, floor seam, or vignette. Preserve each garment's real color, silhouette, material, graphics, logos, patterns, trim, pockets, and construction exactly as supported by its reference. Do not invent branding or details. Do not show floating garments, product cutouts, mannequins, hangers, phones, text, extra people, extra limbs, or extra objects. Output only the finished portrait.`;
 }
 
 function placementFor(category: string, type: string) {
