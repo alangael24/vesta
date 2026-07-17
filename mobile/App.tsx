@@ -483,11 +483,13 @@ function OutfitVisual({
   outfit,
   session,
   showPieces = false,
+  showReadyBadge = true,
   localPieceImages,
 }: {
   outfit: Outfit;
   session: CloudSession | null;
   showPieces?: boolean;
+  showReadyBadge?: boolean;
   localPieceImages?: Map<string, string>;
 }) {
   const visiblePieces = outfit.pieces.slice(0, 6);
@@ -570,7 +572,7 @@ function OutfitVisual({
           ]}
         >
           <Image source={renderSource} resizeMode="cover" style={styles.outfitRenderImage} />
-          <View style={styles.outfitReadyBadge}><Text style={styles.outfitReadyBadgeText}>LOOK REAL</Text></View>
+          {showReadyBadge && <View style={styles.outfitReadyBadge}><Text style={styles.outfitReadyBadgeText}>LOOK REAL</Text></View>}
         </Animated.View>
       )}
     </View>
@@ -2998,7 +3000,7 @@ export default function App() {
                       return (
                         <View key={entry.id} style={styles.plannerOutfitCard}>
                           <Pressable style={styles.plannerOutfitOpen} onPress={() => setSelectedOutfit(outfit)}>
-                            <View style={styles.plannerOutfitVisual}><OutfitVisual outfit={outfit} session={cloudSession} localPieceImages={localWardrobeImages} /></View>
+                            <View style={styles.plannerOutfitVisual}><OutfitVisual outfit={outfit} session={cloudSession} showReadyBadge={false} localPieceImages={localWardrobeImages} /></View>
                             <View style={styles.plannerOutfitFooter}><View><Text style={styles.plannerOutfitName}>{outfit.name}</Text><Text style={styles.plannerOutfitMeta}>{outfit.pieces.length} prendas</Text></View><Text style={styles.homeCardArrow}>›</Text></View>
                           </Pressable>
                           <Pressable style={styles.plannerRemove} onPress={() => removeCalendarEntry(entry)} accessibilityLabel={`Quitar ${outfit.name} del calendario`}><Text style={styles.plannerRemoveText}>×</Text></Pressable>
@@ -3031,7 +3033,7 @@ export default function App() {
                         <View style={[styles.plannerMonthSlot, outside && styles.plannerMonthSlotOutside, scheduled > 0 && styles.plannerMonthSlotScheduled]}>
                           {scheduledOutfit ? (
                             <>
-                              <View style={styles.plannerMonthOutfitPreview}><OutfitVisual outfit={scheduledOutfit} session={cloudSession} localPieceImages={localWardrobeImages} /></View>
+                              <View style={styles.plannerMonthOutfitPreview}><OutfitVisual outfit={scheduledOutfit} session={cloudSession} showReadyBadge={false} localPieceImages={localWardrobeImages} /></View>
                               {scheduled > 1 && <View style={styles.plannerMonthOutfitCount}><Text style={styles.plannerMonthOutfitCountText}>＋{scheduled - 1}</Text></View>}
                             </>
                           ) : <Text style={styles.plannerMonthSlotText}>{outside ? "" : "＋"}</Text>}
@@ -3531,7 +3533,7 @@ export default function App() {
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.calendarPickerList}>
               {outfits.map((outfit) => (
                 <Pressable key={outfit.id} style={[styles.calendarPickerCard, calendarSaving && styles.disabledButton]} onPress={() => saveCalendarEntry(calendarSelectedDate, outfit)} disabled={calendarSaving}>
-                  <View style={styles.calendarPickerThumb}><OutfitVisual outfit={outfit} session={cloudSession} localPieceImages={localWardrobeImages} /></View>
+                  <View style={styles.calendarPickerThumb}><OutfitVisual outfit={outfit} session={cloudSession} showReadyBadge={false} localPieceImages={localWardrobeImages} /></View>
                   <View style={styles.calendarPickerCopy}>
                     <Text style={styles.calendarAgendaEyebrow}>{outfit.occasion.toUpperCase()}</Text>
                     <Text style={styles.calendarAgendaName}>{outfit.name}</Text>
