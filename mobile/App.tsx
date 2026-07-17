@@ -420,6 +420,18 @@ const productPlacements: Array<{ id: ProductPlacementHint; label: string }> = [
   { id: "feet", label: "Pies" },
 ];
 
+function needsWhiteGarmentContrast(color: string | null | undefined) {
+  if (!color) return false;
+  const normalized = color.trim().toLowerCase();
+  if (/\b(blanco|blanca|white|ivory|marfil|crema|cream|off[ -]?white)\b/u.test(normalized)) return true;
+  const hex = normalized.match(/^#([0-9a-f]{6})$/u)?.[1];
+  if (!hex) return false;
+  const red = Number.parseInt(hex.slice(0, 2), 16);
+  const green = Number.parseInt(hex.slice(2, 4), 16);
+  const blue = Number.parseInt(hex.slice(4, 6), 16);
+  return red >= 225 && green >= 225 && blue >= 225;
+}
+
 function Sprite({
   source,
   index,
@@ -460,7 +472,7 @@ function Sprite({
 function GarmentVisual({ item, session }: { item: WardrobeItem; session: CloudSession | null }) {
   if (item.localImageUri) {
     return (
-      <View style={[styles.spriteFrame, { aspectRatio: 1 }]}>
+      <View style={[styles.spriteFrame, needsWhiteGarmentContrast(item.color) && styles.lightGarmentFrame, { aspectRatio: 1 }]}>
         <Image source={{ uri: item.localImageUri }} resizeMode={item.imageKind === "cutout" ? "contain" : "cover"} style={styles.cloudGarmentImage} />
         {item.imageKind === "evidence" && <View style={styles.evidenceBadge}><Text style={styles.evidenceBadgeText}>EVIDENCIA</Text></View>}
         {item.sourceType === "internet" && <View style={styles.internetBadge}><Text style={styles.internetBadgeText}>WEB</Text></View>}
@@ -469,7 +481,7 @@ function GarmentVisual({ item, session }: { item: WardrobeItem; session: CloudSe
   }
   if (item.imagePath && session) {
     return (
-      <View style={[styles.spriteFrame, { aspectRatio: 1 }]}>
+      <View style={[styles.spriteFrame, needsWhiteGarmentContrast(item.color) && styles.lightGarmentFrame, { aspectRatio: 1 }]}>
         <Image source={authorizedImageSource(session, item.imagePath)} resizeMode={item.imageKind === "cutout" ? "contain" : "cover"} style={styles.cloudGarmentImage} />
         {item.imageKind === "evidence" && <View style={styles.evidenceBadge}><Text style={styles.evidenceBadgeText}>EVIDENCIA</Text></View>}
         {item.sourceType === "internet" && <View style={styles.internetBadge}><Text style={styles.internetBadgeText}>WEB</Text></View>}
@@ -523,6 +535,7 @@ function OutfitVisual({
             key={String(piece.id)}
             style={[
               styles.outfitCollageCell,
+              needsWhiteGarmentContrast(piece.color) && styles.lightGarmentFrame,
               {
                 width: `${cellWidth}%`,
                 left: `${(index % collageColumns) * cellWidth}%`,
@@ -3706,6 +3719,7 @@ const styles = StyleSheet.create({
   outfitPendingBadge: { position: "absolute", left: 0, right: 0, bottom: 9, alignItems: "center" },
   outfitPendingBadgeText: { color: paper, fontSize: 6, fontWeight: "900", letterSpacing: 0.8, paddingHorizontal: 9, paddingVertical: 6, borderRadius: 12, backgroundColor: "rgba(33,31,27,.78)" },
   spriteFrame: { width: "100%", overflow: "hidden", backgroundColor: paper },
+  lightGarmentFrame: { backgroundColor: "#F2F3F5" },
   cloudGarmentImage: { width: "100%", height: "100%" },
   evidenceBadge: { position: "absolute", left: 6, bottom: 6, paddingHorizontal: 6, paddingVertical: 4, backgroundColor: "rgba(33,31,27,.78)" },
   evidenceBadgeText: { color: paper, fontSize: 6, fontWeight: "800", letterSpacing: 0.7 },

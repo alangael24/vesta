@@ -44,6 +44,13 @@ test("the closet uses four simple filters while preserving feminine garment type
   assert.match(mobileApp, /fittingSlotsConflict/u);
 });
 
+test("white garments get neutral contrast without changing the app background", () => {
+  assert.match(mobileApp, /needsWhiteGarmentContrast/u);
+  assert.match(mobileApp, /lightGarmentFrame: \{ backgroundColor: "#F2F3F5" \}/u);
+  assert.match(mobileApp, /needsWhiteGarmentContrast\(item\.color\).*styles\.lightGarmentFrame/u);
+  assert.match(mobileApp, /needsWhiteGarmentContrast\(piece\.color\).*styles\.lightGarmentFrame/u);
+});
+
 test("navigation keeps creation central and collections inside Profile", () => {
   assert.match(mobileApp, /type ViewName = "home" \| "profile" \| "closet" \| "builder" \| "looks" \| "calendar" \| "wishlist"/u);
   assert.match(mobileApp, />Home<\/Text>/u);
