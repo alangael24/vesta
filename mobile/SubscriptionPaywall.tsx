@@ -310,7 +310,7 @@ export function SubscriptionPaywall({ visible, onClose, onStatusChange, reason, 
   );
 }
 
-const ink = "#F7F2E9";
+const ink = "#FFFFFF";
 const night = "#0D0E10";
 const panel = "#1B1D21";
 const violet = "#7567FF";
@@ -320,9 +320,9 @@ const line = "#34363C";
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: night, paddingTop: Platform.OS === "ios" ? 48 : 20 },
   hero: { height: 250, marginHorizontal: 8, overflow: "hidden", borderRadius: 34, backgroundColor: "#392C55" },
-  heroGlow: { position: "absolute", width: 310, height: 310, borderRadius: 155, right: -80, top: -100, backgroundColor: "#BC7E74", opacity: .78 },
+  heroGlow: { position: "absolute", width: 310, height: 310, borderRadius: 155, right: -80, top: -100, backgroundColor: "#7567FF", opacity: .72 },
   lookCardBack: { position: "absolute", right: 32, top: 52, width: 112, height: 142, borderRadius: 17, backgroundColor: "#1A1618", opacity: .75, transform: [{ rotate: "8deg" }] },
-  lookCardFront: { position: "absolute", right: 55, top: 40, width: 112, height: 145, padding: 16, borderRadius: 17, backgroundColor: "#E8D0BF", transform: [{ rotate: "-5deg" }] },
+  lookCardFront: { position: "absolute", right: 55, top: 40, width: 112, height: 145, padding: 16, borderRadius: 17, backgroundColor: "#FFFFFF", transform: [{ rotate: "-5deg" }] },
   lookMonogram: { color: "#241C1A", fontFamily: Platform.select({ ios: "Georgia", android: "serif" }), fontSize: 28, fontWeight: "700" },
   lookLine: { width: 62, height: 5, borderRadius: 3, marginTop: 46, backgroundColor: "#9A5B47" },
   lookLineShort: { width: 42, marginTop: 7, opacity: .5 },
@@ -331,7 +331,7 @@ const styles = StyleSheet.create({
   heroCopy: { position: "absolute", left: 28, bottom: 43, maxWidth: "60%" },
   eyebrow: { color: "#E9B9A8", fontSize: 11, fontWeight: "900", letterSpacing: 2 },
   title: { color: "#FFF", fontSize: 36, lineHeight: 40, letterSpacing: -.8, marginTop: 6, fontWeight: "800" },
-  intro: { color: "#F4EDE9", fontSize: 17, lineHeight: 23, marginTop: 8 },
+  intro: { color: "#FFFFFF", fontSize: 17, lineHeight: 23, marginTop: 8 },
   segmentWrap: { zIndex: 5, height: 64, flexDirection: "row", alignItems: "center", marginHorizontal: 44, marginTop: -32, padding: 7, borderRadius: 32, backgroundColor: "#4B3A77" },
   segment: { flex: 1, height: 50, alignItems: "center", justifyContent: "center", borderRadius: 25 },
   segmentSelected: { backgroundColor: "#17151C" },
@@ -366,7 +366,7 @@ const styles = StyleSheet.create({
   priceCopy: { alignItems: "flex-end", maxWidth: 90 },
   price: { color: ink, fontSize: 17, fontWeight: "900" },
   cadence: { color: muted, fontSize: 9, marginTop: 4 },
-  storeMessage: { color: "#F19B7E", textAlign: "center", fontSize: 11, lineHeight: 15, marginTop: 8 },
+  storeMessage: { color: "#FF9B9B", textAlign: "center", fontSize: 11, lineHeight: 15, marginTop: 8 },
   storeHint: { color: muted, textAlign: "center", fontSize: 10, lineHeight: 14, marginTop: 8 },
   purchaseButton: { minHeight: 58, alignItems: "center", justifyContent: "center", marginTop: 14, paddingHorizontal: 16, borderRadius: 29, backgroundColor: violet },
   purchaseButtonText: { color: "#FFF", fontSize: 18, fontWeight: "800" },

@@ -88,10 +88,10 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: 22, paddingTop: 30, paddingBottom: 50 },
   title: { color: "#211F1B", fontSize: 34, lineHeight: 39, letterSpacing: -1.1, fontFamily: "Georgia" },
   updated: { color: "#A34F31", fontSize: 8, fontWeight: "800", letterSpacing: .5, marginTop: 13 },
-  lead: { color: "#655F55", fontSize: 11, lineHeight: 18, marginTop: 14, marginBottom: 8 },
-  section: { paddingVertical: 18, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#D8D1C4" },
+  lead: { color: "#666666", fontSize: 11, lineHeight: 18, marginTop: 14, marginBottom: 8 },
+  section: { paddingVertical: 18, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#E5E5E5" },
   sectionTitle: { color: "#211F1B", fontSize: 12, lineHeight: 17, fontWeight: "900" },
-  body: { color: "#655F55", fontSize: 10, lineHeight: 17, marginTop: 8 },
+  body: { color: "#666666", fontSize: 10, lineHeight: 17, marginTop: 8 },
   contactCard: { marginTop: 22, padding: 17, borderRadius: 16, backgroundColor: "#F7F7F7", borderWidth: 1, borderColor: "#E5E5E5" },
   webLink: { color: "#A34F31", fontSize: 9, lineHeight: 14, fontWeight: "900", textDecorationLine: "underline", marginTop: 13 },
 });
