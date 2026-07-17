@@ -29,6 +29,23 @@ import {
 } from "react-native";
 import { SubscriptionPaywall, SubscriptionStatus } from "./SubscriptionPaywall";
 import { PrivacyPolicyModal } from "./PrivacyPolicy";
+import {
+  AvatarRenderProgress,
+  ClosetIntelligencePanel,
+  EditorialLookCard,
+  LookCollectionHeader,
+  StudioDirector,
+  StylistBriefModal,
+  VestaTodayHero,
+} from "./native-next/VestaNativeNext";
+import {
+  analyzeClosetPulse,
+  directStudioLook,
+  featuredOutfitIdForToday,
+  stylistBriefPayload,
+  type StudioDirection,
+  type StylistBrief,
+} from "./native-next/intelligence";
 
 type ViewName = "home" | "profile" | "closet" | "builder" | "looks" | "calendar" | "wishlist";
 type Category = "all" | "tops" | "layers" | "bottoms" | "footwear" | "accessories" | "one_piece";
@@ -886,6 +903,8 @@ export default function App() {
   const [productImporting, setProductImporting] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
+  const [stylistOpen, setStylistOpen] = useState(false);
+  const [studioDirectionSeed, setStudioDirectionSeed] = useState(0);
   const [reviewLoginOpen, setReviewLoginOpen] = useState(false);
   const [reviewEmail, setReviewEmail] = useState("");
   const [reviewPassword, setReviewPassword] = useState("");
@@ -1010,6 +1029,12 @@ export default function App() {
     [photos],
   );
   const outfitsById = useMemo(() => new Map(outfits.map((outfit) => [outfit.id, outfit])), [outfits]);
+  const closetPulse = useMemo(() => analyzeClosetPulse(activeWardrobe, outfits), [activeWardrobe, outfits]);
+  const featuredOutfitId = useMemo(
+    () => featuredOutfitIdForToday(calendarEntries, outfits, calendarDateKey(new Date())),
+    [calendarEntries, outfits],
+  );
+  const featuredOutfit = featuredOutfitId ? outfitsById.get(featuredOutfitId) || null : null;
   const calendarCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const entry of calendarEntries) counts.set(entry.scheduledDate, (counts.get(entry.scheduledDate) || 0) + 1);
@@ -1514,7 +1539,7 @@ export default function App() {
     if (indexPath) await FileSystem.writeAsStringAsync(indexPath, JSON.stringify(nextOutfits));
   }
 
-  async function generateSavedOutfits() {
+  async function generateSavedOutfits(brief?: StylistBrief) {
     if (!cloudSession || outfitGenerating) return;
     if (!requirePremium("looks")) return;
     if (!localAvatarUri && !cloudAvatar) {
@@ -1524,7 +1549,7 @@ export default function App() {
     }
     setOutfitGenerating(true);
     try {
-      const pendingOutfits = outfits.filter((outfit) => !outfit.renderPath).slice(0, 3);
+      const pendingOutfits = brief ? [] : outfits.filter((outfit) => !outfit.renderPath).slice(0, 3);
       if (pendingOutfits.length) {
         await completeOutfitPhotographs(pendingOutfits);
         return;
@@ -1532,7 +1557,7 @@ export default function App() {
       const response = await cloudFetch(cloudSession, "/api/v1/outfits", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ count: 3 }),
+        body: JSON.stringify(stylistBriefPayload(brief)),
       });
       const result = await response.json() as { outfits?: CloudOutfit[]; created?: number; createdOutfitIds?: string[]; error?: string };
       const mappedOutfits = outfitsForUi(result.outfits || []);
@@ -1556,7 +1581,7 @@ export default function App() {
       if (!createdOutfits.length) throw new Error("created_outfits_missing");
       await completeOutfitPhotographs(createdOutfits);
     } catch (error) {
-      console.info("[Outfit Club looks]", error instanceof Error ? error.message : "unknown");
+      console.info("[Vesta looks]", error instanceof Error ? error.message : "unknown");
       showNotice("No se crearon los Looks", "Tu armario sigue intacto. Puedes reintentarlo.", "error");
     } finally {
       setOutfitGenerationProgress(null);
@@ -1599,7 +1624,7 @@ export default function App() {
         completed += 1;
       } catch (error) {
         failed += 1;
-        console.info("[Outfit Club look render]", error instanceof Error ? error.message : "unknown");
+        console.info("[Vesta look render]", error instanceof Error ? error.message : "unknown");
       }
     }
     if (completed > 0 && cloudSession) await loadOutfits(cloudSession).catch(() => undefined);
@@ -1678,7 +1703,7 @@ export default function App() {
       }
     } catch (error) {
       const detail = error instanceof Error ? error.message : "unknown";
-      console.info("[Outfit Club pending analysis]", detail);
+      console.info("[Vesta pending analysis]", detail);
       setImportStage("error");
       setImportMessage("No pudimos reanudar el análisis todavía. Tus fotos siguen seguras en tu cuenta.");
     }
@@ -1721,7 +1746,7 @@ export default function App() {
         }
       }
     } catch (error) {
-      console.info("[Outfit Club import staging]", error instanceof Error ? error.message : "unknown");
+      console.info("[Vesta import staging]", error instanceof Error ? error.message : "unknown");
       setImportStage("error");
       setImportMessage("No pudimos preparar estas fotos. Tus originales siguen intactos; inténtalo otra vez.");
     } finally {
@@ -1797,7 +1822,7 @@ export default function App() {
       showNotice("Avatar listo", "Ya puedes vestirte con prendas y Looks completos.", "success");
     } catch (error) {
       const detail = error instanceof Error ? error.message : "unknown";
-      console.info("[Outfit Club avatar]", detail);
+      console.info("[Vesta avatar]", detail);
       showNotice("El avatar no terminó", "Tus fotos siguen en este teléfono. Puedes reintentarlo.", "error");
     } finally {
       await Promise.all(temporaryPaths.map((path) => FileSystem.deleteAsync(path, { idempotent: true }).catch(() => undefined)));
@@ -2005,7 +2030,7 @@ export default function App() {
               automaticCloudConnectionStarted.current = false;
               pendingAnalysisOffered.current = false;
               setProfileOpen(true);
-              showNotice("Cuenta eliminada", "Tus datos privados ya no están en Outfit Club.", "success");
+              showNotice("Cuenta eliminada", "Tus datos privados ya no están en Vesta.", "success");
             } catch {
               showNotice("No pudimos eliminar la cuenta", "No se borró parcialmente: inténtalo otra vez con conexión.", "error");
             } finally {
@@ -2201,7 +2226,7 @@ export default function App() {
       }
     } catch (error) {
       const detail = error instanceof Error ? error.message : "unknown";
-      console.info("[Outfit Club import upload]", detail);
+      console.info("[Vesta import upload]", detail);
       setImportStage("error");
       setImportMessage("La importación se pausó. Tus fotos están seguras y puedes continuar sin elegirlas otra vez.");
       if (detail.includes("_401_") || detail.includes("_403_")) {
@@ -2246,7 +2271,7 @@ export default function App() {
         : `${result.garmentCount ?? 0} prendas añadidas a tu armario.`);
       return true;
     } catch (error) {
-      console.info("[Outfit Club inventory processing]", error instanceof Error ? error.message : "unknown");
+      console.info("[Vesta inventory processing]", error instanceof Error ? error.message : "unknown");
       setImportStage("error");
       setImportMessage("El análisis se pausó. Tus fotos siguen seguras y puedes continuar sin volver a subirlas.");
       return false;
@@ -2395,7 +2420,7 @@ export default function App() {
       } else if (detail === "try_on_still_running") {
         showNotice("El Look sigue creándose", "Puedes cerrar la app; aparecerá en Looks cuando termine.");
       } else {
-        console.info("[Outfit Club try-on]", detail);
+        console.info("[Vesta try-on]", detail);
         showNotice("Creación pausada", "Tu outfit quedó guardado y continuará automáticamente cuando vuelvas a abrir la app.", "error");
       }
     } finally {
@@ -2565,6 +2590,24 @@ export default function App() {
     setView("builder");
   };
 
+  const applyStudioDirection = (direction: StudioDirection) => {
+    if (tryOnRendering) return;
+    if (!requirePremium("try_on")) return;
+    const nextSeed = studioDirectionSeed + 1;
+    const result = directStudioLook(
+      activeWardrobe,
+      tryOnLayers.map((layer) => layer.item),
+      direction,
+      nextSeed,
+    );
+    setStudioDirectionSeed(nextSeed);
+    if (result.changed) {
+      setTryOnLayers(result.items.map((item, index) => ({ key: `${item.id}-director-${nextSeed}-${index}`, item })));
+      setTryOnSavedOutfitId(null);
+    }
+    showNotice(result.label, result.explanation, result.changed ? "success" : "info");
+  };
+
   const tryOnWardrobe = activeWardrobe.filter((item) => item.imagePath && item.imageKind === "cutout");
   const selectedTryOnSignature = tryOnSignatureFor(tryOnLayers);
   const tryOnHasPendingChanges = tryOnLayers.length > 0 && selectedTryOnSignature !== tryOnRenderedSignature;
@@ -2596,8 +2639,8 @@ export default function App() {
         )}
         {view !== "calendar" && <View style={styles.topbar}>
           <Pressable onPress={() => setView("home")} style={styles.brand} accessibilityLabel="Ir a Home">
-            <View style={styles.brandMark}><Text style={styles.brandLetter}>OC</Text></View>
-            <Text style={styles.brandName}>OUTFIT CLUB</Text>
+            <View style={styles.brandMark}><Text style={styles.brandLetter}>V</Text></View>
+            <Text style={styles.brandName}>VESTA</Text>
           </Pressable>
             <View style={styles.cloudBadge}>
             <View style={cloudSession ? styles.greenDot : styles.rustDot} />
@@ -2612,58 +2655,48 @@ export default function App() {
 
         {view === "home" && (
           <ScrollView contentContainerStyle={styles.screenContent} showsVerticalScrollIndicator={false}>
-            <View style={styles.homeHero}>
-              <Text style={styles.eyebrow}>TU ESTILO, EN UN SOLO LUGAR</Text>
-              <Text style={styles.homeTitle}>¿Qué te vas a poner hoy?</Text>
-              <Text style={styles.homeIntro}>Organiza tu ropa, crea atuendos y vuelve a usar tus mejores combinaciones.</Text>
-              <Pressable style={styles.homePrimaryAction} onPress={() => setCreateMenuOpen(true)}>
-                <Text style={styles.homePrimaryActionText}>＋ Crear algo nuevo</Text>
-              </Pressable>
-            </View>
+            <VestaTodayHero
+              visual={featuredOutfit
+                ? <OutfitVisual outfit={featuredOutfit} session={cloudSession} showReadyBadge={false} localPieceImages={localWardrobeImages} />
+                : undefined}
+              avatarSource={avatarDisplaySource}
+              outfit={featuredOutfit ? {
+                name: featuredOutfit.name,
+                occasion: featuredOutfit.occasion,
+                isReal: Boolean(featuredOutfit.renderPath || featuredOutfit.localRenderUri),
+              } : null}
+              pulse={closetPulse}
+              onOpenLook={() => featuredOutfit ? setSelectedOutfit(featuredOutfit) : setStylistOpen(true)}
+              onStudio={() => setView("builder")}
+              onStylist={() => setStylistOpen(true)}
+            />
 
-            <View style={styles.homeSectionHeading}>
-              <View><Text style={styles.eyebrow}>HOY</Text><Text style={styles.homeSectionTitle}>Tu calendario</Text></View>
-              <Pressable onPress={() => { setCalendarSelectedDate(calendarDateKey(new Date())); setView("calendar"); }}><Text style={styles.homeSectionLink}>Ver calendario</Text></Pressable>
-            </View>
-            {calendarEntries.filter((entry) => entry.scheduledDate === calendarDateKey(new Date())).length ? (
-              <View style={styles.homeTodayList}>
-                {calendarEntries.filter((entry) => entry.scheduledDate === calendarDateKey(new Date())).slice(0, 2).map((entry) => {
-                  const outfit = outfitsById.get(entry.outfitId);
-                  if (!outfit) return null;
-                  return (
-                    <Pressable key={entry.id} style={styles.homeTodayCard} onPress={() => setSelectedOutfit(outfit)}>
-                      <View style={styles.homeTodayThumb}><OutfitVisual outfit={outfit} session={cloudSession} localPieceImages={localWardrobeImages} /></View>
-                      <View style={styles.homeTodayCopy}><Text style={styles.homeTodayEyebrow}>ATUENDO DE HOY</Text><Text style={styles.homeTodayName}>{outfit.name}</Text><Text style={styles.homeTodayMeta}>{outfit.pieces.length} prendas</Text></View>
-                      <Text style={styles.homeCardArrow}>›</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            ) : (
-              <Pressable style={styles.homeEmptyCalendar} onPress={() => setView("calendar")}>
-                <Text style={styles.homeEmptyCalendarIcon}>□</Text>
-                <View style={styles.homeEmptyCalendarCopy}><Text style={styles.homeEmptyCalendarTitle}>Hoy está libre</Text><Text style={styles.homeEmptyCalendarMeta}>Agrega un outfit al calendario cuando quieras planearlo.</Text></View>
-                <Text style={styles.homeCardArrow}>›</Text>
-              </Pressable>
-            )}
+            <ClosetIntelligencePanel
+              pulse={closetPulse}
+              onOpenCloset={() => setView("closet")}
+              onOpenStylist={() => setStylistOpen(true)}
+            />
 
-            <View style={styles.homeSectionHeading}>
-              <View><Text style={styles.eyebrow}>RECIENTES</Text><Text style={styles.homeSectionTitle}>Tus últimos outfits</Text></View>
-              <Pressable onPress={() => setView("looks")}><Text style={styles.homeSectionLink}>Ver todos</Text></Pressable>
+            <View style={[styles.homeSectionHeading, { marginTop: 28 }]}>
+              <View><Text style={styles.eyebrow}>EDITORIAL</Text><Text style={styles.homeSectionTitle}>Últimos looks reales</Text></View>
+              <Pressable onPress={() => setView("looks")}><Text style={styles.homeSectionLink}>Ver colección</Text></Pressable>
             </View>
             {outfits.length ? (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.homeLooksRail}>
-                {outfits.slice(0, 5).map((outfit) => (
-                  <Pressable key={outfit.id} style={styles.homeLookCard} onPress={() => setSelectedOutfit(outfit)}>
-                    <View style={styles.homeLookVisual}><OutfitVisual outfit={outfit} session={cloudSession} localPieceImages={localWardrobeImages} /></View>
-                    <Text style={styles.homeLookName} numberOfLines={1}>{outfit.name}</Text>
-                  </Pressable>
-                ))}
+                {[...outfits]
+                  .sort((first, second) => Number(Boolean(second.renderPath || second.localRenderUri)) - Number(Boolean(first.renderPath || first.localRenderUri)))
+                  .slice(0, 6)
+                  .map((outfit) => (
+                    <Pressable key={outfit.id} style={styles.homeLookCard} onPress={() => setSelectedOutfit(outfit)}>
+                      <View style={styles.homeLookVisual}><OutfitVisual outfit={outfit} session={cloudSession} localPieceImages={localWardrobeImages} /></View>
+                      <Text style={styles.homeLookName} numberOfLines={1}>{outfit.name}</Text>
+                    </Pressable>
+                  ))}
               </ScrollView>
             ) : (
-              <Pressable style={styles.homeEmptyLooks} onPress={() => setView("builder")}>
-                <Text style={styles.homeEmptyLooksTitle}>Crea tu primer atuendo</Text>
-                <Text style={styles.homeEmptyLooksCopy}>Combina las prendas de tu guardarropa y guárdalo en Outfits.</Text>
+              <Pressable style={styles.homeEmptyLooks} onPress={() => setStylistOpen(true)}>
+                <Text style={styles.homeEmptyLooksTitle}>Tu primer editorial empieza aquí</Text>
+                <Text style={styles.homeEmptyLooksCopy}>Define ocasión, clima y dirección. Vesta construirá tres opciones y las llevará a tu avatar.</Text>
               </Pressable>
             )}
           </ScrollView>
@@ -2783,11 +2816,11 @@ export default function App() {
 
         {view === "builder" && (
           <ScrollView contentContainerStyle={styles.builderScreen} scrollEnabled={!wardrobeDrag && !tryOnRendering}>
-            <Text style={styles.eyebrow}>PROBADOR PERSONAL</Text>
+            <Text style={styles.eyebrow}>VESTA STUDIO</Text>
             <View style={styles.tryOnHeadingRow}>
               <View style={styles.tryOnHeadingCopy}>
-                <Text style={styles.tryOnTitle}>Pruébatelo.</Text>
-                <Text style={styles.tryOnIntro}>Selecciona todas las prendas del outfit y genera una sola prueba cuando la combinación esté lista.</Text>
+                <Text style={styles.tryOnTitle}>Dirige tu look.</Text>
+                <Text style={styles.tryOnIntro}>Construye, remixa y aprueba la combinación. Tu avatar AI entra solo al final.</Text>
               </View>
               {tryOnLayers.length > 0 && (
                 <Pressable onPress={() => clearTryOn().catch(() => undefined)} style={[styles.clearTryOnButton, tryOnRendering && styles.disabledButton]} disabled={tryOnRendering}>
@@ -2796,18 +2829,13 @@ export default function App() {
               )}
             </View>
 
-            <Pressable
-              style={[styles.webTryOnBanner, tryOnRendering && styles.disabledButton]}
-              onPress={() => requirePremium("wardrobe") && setLinkImportOpen(true)}
+            <StudioDirector
+              selectedCount={tryOnLayers.length}
               disabled={tryOnRendering}
-            >
-              <View style={styles.webTryOnIcon}><Text style={styles.webTryOnIconText}>↗</Text></View>
-              <View style={styles.webTryOnCopy}>
-                <Text style={styles.webTryOnEyebrow}>¿VISTE ALGO EN INTERNET?</Text>
-                <Text style={styles.webTryOnTitle}>Pega el link y combínalo</Text>
-              </View>
-              <Text style={styles.webTryOnArrow}>›</Text>
-            </Pressable>
+              onDirection={applyStudioDirection}
+              onStylist={() => setStylistOpen(true)}
+              onImportLink={() => requirePremium("wardrobe") && setLinkImportOpen(true)}
+            />
 
             <ScrollView horizontal scrollEnabled={!wardrobeDrag && !tryOnRendering} showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.tryOnRail, tryOnRendering && styles.tryOnRailDisabled]} pointerEvents={tryOnRendering ? "none" : "auto"}>
               {tryOnWardrobe.map((item) => (
@@ -2864,15 +2892,7 @@ export default function App() {
                   </View>
                 );
               })()}
-              {tryOnRendering && (
-                <View pointerEvents="none" style={styles.tryOnRenderingOverlay}>
-                  <View style={styles.tryOnRenderingCard}>
-                    <ActivityIndicator color={rust} size="large" />
-                    <Text style={styles.tryOnRenderingTitle}>{tryOnRenderingQuality === "low" ? "Creando prueba rápida…" : "Mejorando el look…"}</Text>
-                    <Text style={styles.tryOnRenderingCopy}>{tryOnRenderingQuality === "low" ? "Ajustando todas las prendas al cuerpo con el modo más veloz." : "Refinando tela, volumen, identidad y detalles en mejor calidad."}</Text>
-                  </View>
-                </View>
-              )}
+              {tryOnRendering && <AvatarRenderProgress quality={tryOnRenderingQuality} />}
               {tryOnLayers.length === 0 && !tryOnRendering && avatarDisplaySource && (
                 <View pointerEvents="none" style={styles.tryOnHint}>
                   <Text style={styles.tryOnHintIcon}>↓</Text>
@@ -2904,17 +2924,17 @@ export default function App() {
                 </View>
                 {tryOnHasPendingChanges && !tryOnRendering && (
                   <Pressable style={styles.generateTryOnOutfitButton} onPress={generateTryOnOutfit}>
-                    <Text style={styles.generateTryOnOutfitButtonText}>Probar outfit · {tryOnLayers.length} {tryOnLayers.length === 1 ? "prenda" : "prendas"}</Text>
+                    <Text style={styles.generateTryOnOutfitButtonText}>Verme con este look · {tryOnLayers.length} {tryOnLayers.length === 1 ? "prenda" : "prendas"}</Text>
                   </Pressable>
                 )}
                 {!tryOnHasPendingChanges && tryOnResultQuality === "low" && !tryOnRendering && (
                   <Pressable style={styles.improveTryOnButton} onPress={improveTryOnQuality}>
-                    <Text style={styles.improveTryOnButtonText}>✦ Mejorar este look</Text>
+                    <Text style={styles.improveTryOnButtonText}>✦ Llevar a calidad editorial</Text>
                   </Pressable>
                 )}
               </View>
             )}
-            <Text style={styles.tryOnFootnote}>Combina arriba, capa, pantalón, gorra y calzado antes de generar. Solo se hace una solicitud por outfit.</Text>
+            <Text style={styles.tryOnFootnote}>Vesta no simula con capas 2.5D: la vista final se genera directamente sobre tu avatar AI.</Text>
           </ScrollView>
         )}
 
@@ -2922,46 +2942,36 @@ export default function App() {
           <FlatList
             data={outfits}
             keyExtractor={(item) => String(item.id)}
-            numColumns={2}
-            columnWrapperStyle={styles.cardRow}
             contentContainerStyle={styles.screenContent}
-            initialNumToRender={6}
-            maxToRenderPerBatch={6}
-            updateCellsBatchingPeriod={16}
-            windowSize={5}
-            removeClippedSubviews
+            initialNumToRender={3}
+            maxToRenderPerBatch={4}
+            windowSize={4}
             ListHeaderComponent={
-              <View>
-                <ProfileCollectionTabs view={view} onSelect={setView} />
-                <View style={styles.headingRow}>
-                  <View>
-                    <Text style={styles.eyebrow}>TUS COMBINACIONES</Text>
-                    <Text style={styles.pageTitle}>Looks <Text style={styles.count}>{outfits.length}</Text></Text>
-                  </View>
-                  <Pressable style={[styles.importButton, outfitGenerating && styles.disabledButton]} onPress={generateSavedOutfits} disabled={outfitGenerating || !cloudSession}>
-                    <Text style={styles.importButtonText}>{outfitGenerating
-                      ? outfitGenerationProgress ? `VISTIENDO ${outfitGenerationProgress.current}/${outfitGenerationProgress.total}…` : "PREPARANDO…"
-                      : pendingOutfitCount ? "Crear fotos　✦" : "Generar　✦"}</Text>
-                  </Pressable>
-                </View>
-                <Text style={styles.looksIntro}>Outfit Club arma el outfit y crea una foto realista de ti usándolo. Cada imagen terminada se guarda para no volver a generarla al abrirla.</Text>
-              </View>
+              <LookCollectionHeader
+                count={outfits.length}
+                realCount={outfits.filter((outfit) => Boolean(outfit.renderPath || outfit.localRenderUri)).length}
+                loading={outfitGenerating}
+                progress={outfitGenerationProgress}
+                onDirect={() => setStylistOpen(true)}
+              />
             }
             ListEmptyComponent={
               <View style={styles.emptyCollection}>
-                {outfitsLoading ? <ActivityIndicator color={rust} /> : <Text style={styles.emptyCollectionTitle}>Crea tus primeros Looks.</Text>}
-                <Text style={styles.emptyCollectionCopy}>{outfitsLoading ? "Sincronizando tu colección privada…" : "Genera combinaciones completas y guárdalas automáticamente en tu cuenta."}</Text>
+                {outfitsLoading ? <ActivityIndicator color={rust} /> : <Text style={styles.emptyCollectionTitle}>Tu editorial todavía está vacío.</Text>}
+                <Text style={styles.emptyCollectionCopy}>{outfitsLoading ? "Sincronizando tu colección privada…" : "Dirige una intención y crea tus primeros looks reales sobre el avatar AI."}</Text>
               </View>
             }
             renderItem={({ item }) => (
-              <LookCard
-                outfit={item}
-                session={cloudSession}
+              <EditorialLookCard
+                visual={<OutfitVisual outfit={item} session={cloudSession} showReadyBadge={false} localPieceImages={localWardrobeImages} />}
+                name={item.name}
+                occasion={item.occasion}
+                note={item.note}
+                pieceCount={item.pieces.length}
+                isReal={Boolean(item.renderPath || item.localRenderUri)}
                 onOpen={() => setSelectedOutfit(item)}
-                onPeek={() => setPeekedOutfit(item)}
-                onPeekEnd={() => setPeekedOutfit(null)}
-                showPieces={peekedOutfit?.id === item.id}
-                localPieceImages={localWardrobeImages}
+                onPlan={() => openCalendarForOutfit(item)}
+                onEdit={() => trySavedOutfit(item)}
               />
             )}
           />
@@ -3126,7 +3136,7 @@ export default function App() {
             <View style={styles.scanOrb}><Text style={styles.scanOrbText}>✦</Text></View>
             <Text style={[styles.eyebrow, styles.centerText]}>CARRETE DEL TELÉFONO</Text>
             <Text style={styles.modalTitle}>Elige las fotos para tu armario.</Text>
-            <Text style={styles.modalIntro}>Al elegirlas, Outfit Club las guardará en tu cuenta privada y comenzará el análisis automáticamente. Puedes cerrar la app: la importación continuará o se reanudará después.</Text>
+            <Text style={styles.modalIntro}>Al elegirlas, Vesta las guardará en tu cuenta privada y comenzará el análisis automáticamente. Puedes cerrar la app: la importación continuará o se reanudará después.</Text>
             <View style={styles.privacyPill}><View style={cloudSession ? styles.greenDot : styles.rustDot} /><Text style={styles.privacyPillText}>{cloudSession ? "CUENTA PRIVADA PROTEGIDA" : "PREPARANDO CUENTA PRIVADA"}</Text></View>
 
             <Pressable style={styles.webImportChoice} onPress={() => { setImportOpen(false); setLinkImportOpen(true); }}>
@@ -3196,7 +3206,7 @@ export default function App() {
             <Pressable style={styles.closeButton} onPress={() => setLinkImportOpen(false)} disabled={productImporting}><Text style={styles.closeText}>×</Text></Pressable>
             <View style={styles.scanOrb}><Text style={styles.scanOrbText}>↗</Text></View>
             <Text style={[styles.eyebrow, styles.centerText]}>PRENDA DE INTERNET</Text>
-            <Text style={styles.modalTitle}>Pega el link. Outfit Club te la pone.</Text>
+            <Text style={styles.modalTitle}>Pega el link. Vesta te la pone.</Text>
             <Text style={styles.modalIntro}>Importaremos la imagen pública del producto a tu armario privado y crearemos una prueba realista sobre tu avatar.</Text>
 
             <TextInput
@@ -3253,7 +3263,7 @@ export default function App() {
                   ? <Image source={avatarDisplaySource} resizeMode="cover" style={styles.profileAvatarImage} />
                   : <Text style={styles.profileAvatarText}>YO</Text>}
               </View>
-              <Text style={[styles.eyebrow, styles.centerText]}>TU OUTFIT CLUB</Text>
+              <Text style={[styles.eyebrow, styles.centerText]}>TU VESTA</Text>
               <Text style={styles.modalTitle}>{cloudSession ? "Tu nube privada." : "Tu armario, siempre contigo."}</Text>
               <Text style={styles.modalIntro}>{cloudSession
                 ? "Tu avatar, armario y Looks están sincronizados automáticamente y protegidos por tu cuenta."
@@ -3261,7 +3271,7 @@ export default function App() {
               {cloudSession && <Pressable style={styles.premiumCard} onPress={() => { setProfileOpen(false); openPremium(null); }}>
                 <View style={styles.premiumCardIcon}><Text style={styles.premiumCardIconText}>OC</Text></View>
                 <View style={styles.premiumCardCopy}>
-                  <Text style={styles.premiumCardEyebrow}>OUTFIT CLUB PREMIUM</Text>
+                  <Text style={styles.premiumCardEyebrow}>VESTA PREMIUM</Text>
                   <Text style={styles.premiumCardTitle}>Ver planes y administrar pagos</Text>
                 </View>
                 <Text style={styles.premiumCardArrow}>›</Text>
@@ -3327,7 +3337,7 @@ export default function App() {
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.avatarSheetContent}>
               <Text style={[styles.eyebrow, styles.centerText]}>IDENTIDAD PRIVADA</Text>
               <Text style={styles.modalTitle}>{avatarDisplaySource ? "Actualiza tu avatar." : "Crea tu avatar."}</Text>
-              <Text style={styles.modalIntro}>Elige una selfie clara y una foto de cuerpo completo. Outfit Club creará una base neutral reutilizable para el probador.</Text>
+              <Text style={styles.modalIntro}>Elige una selfie clara y una foto de cuerpo completo. Vesta creará una base neutral reutilizable para el probador.</Text>
                   {avatarDisplaySource && (
                     <View style={styles.currentAvatarCard}>
                       <Image source={avatarDisplaySource} resizeMode="contain" style={styles.currentAvatarImage} />
@@ -3497,6 +3507,19 @@ export default function App() {
           </View>
         </View>
       </Modal>
+
+      <StylistBriefModal
+        visible={stylistOpen}
+        garments={tryOnWardrobe}
+        initialAnchorIds={tryOnLayers.map((layer) => String(layer.item.id))}
+        loading={outfitGenerating}
+        renderGarment={(item) => <GarmentVisual item={item} session={cloudSession} />}
+        onClose={() => { if (!outfitGenerating) setStylistOpen(false); }}
+        onSubmit={(brief) => {
+          setStylistOpen(false);
+          generateSavedOutfits(brief).catch(() => undefined);
+        }}
+      />
 
       <Modal visible={Boolean(selectedOutfit)} transparent animationType="slide" onRequestClose={() => setSelectedOutfit(null)}>
         <View style={styles.detailBackdrop}>
