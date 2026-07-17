@@ -5,9 +5,9 @@ export const subscriptionProductIds = {
 } as const;
 
 export const subscriptionAllowances = {
-  [subscriptionProductIds.weekly]: { wardrobeAddition: 50, lookGeneration: 150 },
-  [subscriptionProductIds.monthly]: { wardrobeAddition: 100, lookGeneration: 250 },
-  [subscriptionProductIds.annual]: { wardrobeAddition: 1_200, lookGeneration: 3_000 },
+  [subscriptionProductIds.weekly]: { credits: 150 },
+  [subscriptionProductIds.monthly]: { credits: 250 },
+  [subscriptionProductIds.annual]: { credits: 3_000 },
 } as const;
 
 export function allowancesForProduct(productId: string) {

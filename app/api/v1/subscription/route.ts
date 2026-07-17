@@ -61,8 +61,7 @@ async function entitlementStatus(ownerId: string) {
   const active = Boolean(entitlement?.status === "active" && entitlement.expiresAt > new Date().toISOString());
   if (!entitlement) return { active: false, plan: null, allowances: null, usage: null };
   const [usage] = await db.select({
-    wardrobeAdditions: sql<number>`coalesce(sum(case when ${subscriptionUsage.kind} = 'wardrobe_addition' and ${subscriptionUsage.status} != 'released' then ${subscriptionUsage.amount} else 0 end), 0)`,
-    lookGenerations: sql<number>`coalesce(sum(case when ${subscriptionUsage.kind} = 'look_generation' and ${subscriptionUsage.status} != 'released' then ${subscriptionUsage.amount} else 0 end), 0)`,
+    credits: sql<number>`coalesce(sum(case when ${subscriptionUsage.status} != 'released' then ${subscriptionUsage.amount} else 0 end), 0)`,
   }).from(subscriptionUsage).where(and(
     eq(subscriptionUsage.ownerId, ownerId),
     eq(subscriptionUsage.originalTransactionId, entitlement.originalTransactionId),
@@ -75,13 +74,9 @@ async function entitlementStatus(ownerId: string) {
     plan: entitlement.productId,
     periodStart: entitlement.purchasedAt,
     periodEnd: entitlement.expiresAt,
-    allowances: allowances ? {
-      wardrobeAdditions: allowances.wardrobeAddition,
-      lookGenerations: allowances.lookGeneration,
-    } : null,
+    allowances: allowances ? { credits: allowances.credits } : null,
     usage: {
-      wardrobeAdditions: Number(usage?.wardrobeAdditions || 0),
-      lookGenerations: Number(usage?.lookGenerations || 0),
+      credits: Number(usage?.credits || 0),
     },
   };
 }

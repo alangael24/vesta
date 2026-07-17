@@ -4,11 +4,25 @@ import { allowancesForProduct, subscriptionProductIds } from "../lib/subscriptio
 import { verifyAppleSubscription } from "../lib/apple-subscription.ts";
 import { readFileSync } from "node:fs";
 
-test("weekly Premium exposes the commercial limits enforced by the backend", () => {
+test("every Premium product exposes one shared credit allowance", () => {
   assert.equal(subscriptionProductIds.weekly, "com.alangael.vesta.premium.weekly");
-  assert.deepEqual(allowancesForProduct(subscriptionProductIds.weekly), { wardrobeAddition: 50, lookGeneration: 150 });
-  assert.deepEqual(allowancesForProduct(subscriptionProductIds.monthly), { wardrobeAddition: 100, lookGeneration: 250 });
-  assert.deepEqual(allowancesForProduct(subscriptionProductIds.annual), { wardrobeAddition: 1_200, lookGeneration: 3_000 });
+  assert.deepEqual(allowancesForProduct(subscriptionProductIds.weekly), { credits: 150 });
+  assert.deepEqual(allowancesForProduct(subscriptionProductIds.monthly), { credits: 250 });
+  assert.deepEqual(allowancesForProduct(subscriptionProductIds.annual), { credits: 3_000 });
+});
+
+test("wardrobe additions and outfit generations spend from the same balance", () => {
+  const usageServer = readFileSync(new URL("../lib/subscription-usage-server.ts", import.meta.url), "utf8");
+  const usageRoute = readFileSync(new URL("../app/api/v1/subscription/usage/route.ts", import.meta.url), "utf8");
+  const statusRoute = readFileSync(new URL("../app/api/v1/subscription/route.ts", import.meta.url), "utf8");
+  const paywall = readFileSync(new URL("../mobile/SubscriptionPaywall.tsx", import.meta.url), "utf8");
+  assert.match(usageServer, /const limit = allowances\.credits/u);
+  assert.doesNotMatch(usageServer, /eq\(subscriptionUsage\.kind, kind\)/u);
+  assert.match(usageRoute, /const limit = allowances\.credits/u);
+  assert.doesNotMatch(usageRoute, /eq\(subscriptionUsage\.kind, body\.kind/u);
+  assert.match(statusRoute, /allowances: allowances \? \{ credits: allowances\.credits \}/u);
+  assert.match(paywall, /Créditos disponibles/u);
+  assert.match(paywall, /Una prenda o una generación usa 1 crédito/u);
 });
 
 test("subscription verification rejects unsigned client claims", async () => {

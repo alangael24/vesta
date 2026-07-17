@@ -66,14 +66,13 @@ export async function POST(request: Request) {
       eq(subscriptionUsage.originalTransactionId, entitlement.originalTransactionId),
       eq(subscriptionUsage.periodStart, entitlement.purchasedAt),
       eq(subscriptionUsage.periodEnd, entitlement.expiresAt),
-      eq(subscriptionUsage.kind, body.kind as UsageKind),
       ne(subscriptionUsage.status, "released"),
     ));
-  const limit = body.kind === "wardrobe_addition" ? allowances.wardrobeAddition : allowances.lookGeneration;
+  const limit = allowances.credits;
   if (Number(total?.value || 0) > limit) {
     await db.update(subscriptionUsage).set({ status: "released", updatedAt: new Date().toISOString() })
       .where(eq(subscriptionUsage.id, reservationId));
-    return Response.json({ error: "weekly_limit_reached", kind: body.kind, limit }, { status: 429, headers: privateHeaders() });
+    return Response.json({ error: "credit_limit_reached", kind: body.kind, limit }, { status: 429, headers: privateHeaders() });
   }
   return Response.json({ ok: true, metered: true, reservationId, status: "reserved", limit, used: Number(total?.value || 0) }, { headers: privateHeaders() });
 }

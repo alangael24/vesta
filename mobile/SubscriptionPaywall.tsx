@@ -39,8 +39,8 @@ type Props = {
 
 export type SubscriptionStatus = {
   active: boolean;
-  allowances?: { wardrobeAdditions: number; lookGenerations: number } | null;
-  usage?: { wardrobeAdditions: number; lookGenerations: number } | null;
+  allowances?: { credits: number } | null;
+  usage?: { credits: number } | null;
 };
 
 export function SubscriptionPaywall({ visible, onClose, onStatusChange, reason, cloud }: Props) {
@@ -252,14 +252,10 @@ export function SubscriptionPaywall({ visible, onClose, onStatusChange, reason, 
             {serverStatus?.active && serverStatus.allowances && serverStatus.usage && (
               <View style={styles.quotaCard}>
                 <View style={styles.quotaRow}>
-                  <Text style={styles.quotaLabel}>Prendas disponibles</Text>
-                  <Text style={styles.quotaValue}>{Math.max(0, serverStatus.allowances.wardrobeAdditions - serverStatus.usage.wardrobeAdditions)} de {serverStatus.allowances.wardrobeAdditions}</Text>
+                  <Text style={styles.quotaLabel}>Créditos disponibles</Text>
+                  <Text style={styles.quotaValue}>{Math.max(0, serverStatus.allowances.credits - serverStatus.usage.credits)} de {serverStatus.allowances.credits}</Text>
                 </View>
-                <View style={styles.quotaRow}>
-                  <Text style={styles.quotaLabel}>Looks disponibles</Text>
-                  <Text style={styles.quotaValue}>{Math.max(0, serverStatus.allowances.lookGenerations - serverStatus.usage.lookGenerations)} de {serverStatus.allowances.lookGenerations}</Text>
-                </View>
-                <Text style={styles.quotaNote}>Abrir Looks guardados no consume unidades.</Text>
+                <Text style={styles.quotaNote}>Una prenda o una generación usa 1 crédito. Abrir lo guardado no consume.</Text>
               </View>
             )}
             {selected.benefits.map((benefit) => (

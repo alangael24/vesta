@@ -20,11 +20,10 @@ export async function requireUsageCapacity(ownerId: string, kind: MeteredUsageKi
       eq(subscriptionUsage.originalTransactionId, entitlement.originalTransactionId),
       eq(subscriptionUsage.periodStart, entitlement.purchasedAt),
       eq(subscriptionUsage.periodEnd, entitlement.expiresAt),
-      eq(subscriptionUsage.kind, kind),
       ne(subscriptionUsage.status, "released"),
     ));
-  const limit = kind === "wardrobe_addition" ? allowances.wardrobeAddition : allowances.lookGeneration;
-  if (Number(usage?.value || 0) + amount > limit) throw new SubscriptionUsageError("weekly_limit_reached", 429, limit);
+  const limit = allowances.credits;
+  if (Number(usage?.value || 0) + amount > limit) throw new SubscriptionUsageError("credit_limit_reached", 429, limit);
   return entitlement;
 }
 
