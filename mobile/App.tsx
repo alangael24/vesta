@@ -472,8 +472,10 @@ function Sprite({
 function GarmentVisual({ item, session }: { item: WardrobeItem; session: CloudSession | null }) {
   if (item.localImageUri) {
     return (
-      <View style={[styles.spriteFrame, needsWhiteGarmentContrast(item.color) && styles.lightGarmentFrame, { aspectRatio: 1 }]}>
-        <Image source={{ uri: item.localImageUri }} resizeMode={item.imageKind === "cutout" ? "contain" : "cover"} style={styles.cloudGarmentImage} />
+      <View style={[styles.spriteFrame, { aspectRatio: 1 }]}>
+        <View style={[styles.garmentImageLayer, needsWhiteGarmentContrast(item.color) && styles.lightGarmentFilter]}>
+          <Image source={{ uri: item.localImageUri }} resizeMode={item.imageKind === "cutout" ? "contain" : "cover"} style={styles.cloudGarmentImage} />
+        </View>
         {item.imageKind === "evidence" && <View style={styles.evidenceBadge}><Text style={styles.evidenceBadgeText}>EVIDENCIA</Text></View>}
         {item.sourceType === "internet" && <View style={styles.internetBadge}><Text style={styles.internetBadgeText}>WEB</Text></View>}
       </View>
@@ -481,8 +483,10 @@ function GarmentVisual({ item, session }: { item: WardrobeItem; session: CloudSe
   }
   if (item.imagePath && session) {
     return (
-      <View style={[styles.spriteFrame, needsWhiteGarmentContrast(item.color) && styles.lightGarmentFrame, { aspectRatio: 1 }]}>
-        <Image source={authorizedImageSource(session, item.imagePath)} resizeMode={item.imageKind === "cutout" ? "contain" : "cover"} style={styles.cloudGarmentImage} />
+      <View style={[styles.spriteFrame, { aspectRatio: 1 }]}>
+        <View style={[styles.garmentImageLayer, needsWhiteGarmentContrast(item.color) && styles.lightGarmentFilter]}>
+          <Image source={authorizedImageSource(session, item.imagePath)} resizeMode={item.imageKind === "cutout" ? "contain" : "cover"} style={styles.cloudGarmentImage} />
+        </View>
         {item.imageKind === "evidence" && <View style={styles.evidenceBadge}><Text style={styles.evidenceBadgeText}>EVIDENCIA</Text></View>}
         {item.sourceType === "internet" && <View style={styles.internetBadge}><Text style={styles.internetBadgeText}>WEB</Text></View>}
       </View>
@@ -535,7 +539,6 @@ function OutfitVisual({
             key={String(piece.id)}
             style={[
               styles.outfitCollageCell,
-              needsWhiteGarmentContrast(piece.color) && styles.lightGarmentFrame,
               {
                 width: `${cellWidth}%`,
                 left: `${(index % collageColumns) * cellWidth}%`,
@@ -560,9 +563,9 @@ function OutfitVisual({
             ]}
           >
             {localPieceImages?.get(String(piece.id))
-              ? <Image source={{ uri: localPieceImages.get(String(piece.id))! }} resizeMode="contain" style={styles.outfitCollageImage} />
+              ? <View style={[styles.outfitCollageImage, needsWhiteGarmentContrast(piece.color) && styles.lightGarmentFilter]}><Image source={{ uri: localPieceImages.get(String(piece.id))! }} resizeMode="contain" style={styles.cloudGarmentImage} /></View>
               : piece.imagePath && session
-                ? <Image source={authorizedImageSource(session, piece.imagePath)} resizeMode="contain" style={styles.outfitCollageImage} />
+                ? <View style={[styles.outfitCollageImage, needsWhiteGarmentContrast(piece.color) && styles.lightGarmentFilter]}><Image source={authorizedImageSource(session, piece.imagePath)} resizeMode="contain" style={styles.cloudGarmentImage} /></View>
               : <Text style={styles.outfitCollageFallback}>✦</Text>}
           </Animated.View>
         ))}
@@ -3719,7 +3722,8 @@ const styles = StyleSheet.create({
   outfitPendingBadge: { position: "absolute", left: 0, right: 0, bottom: 9, alignItems: "center" },
   outfitPendingBadgeText: { color: paper, fontSize: 6, fontWeight: "900", letterSpacing: 0.8, paddingHorizontal: 9, paddingVertical: 6, borderRadius: 12, backgroundColor: "rgba(33,31,27,.78)" },
   spriteFrame: { width: "100%", overflow: "hidden", backgroundColor: paper },
-  lightGarmentFrame: { backgroundColor: "#F2F3F5" },
+  garmentImageLayer: { width: "100%", height: "100%" },
+  lightGarmentFilter: { filter: [{ dropShadow: { offsetX: 0, offsetY: 1, standardDeviation: 1.35, color: "rgba(55,65,81,.38)" as const } }] },
   cloudGarmentImage: { width: "100%", height: "100%" },
   evidenceBadge: { position: "absolute", left: 6, bottom: 6, paddingHorizontal: 6, paddingVertical: 4, backgroundColor: "rgba(33,31,27,.78)" },
   evidenceBadgeText: { color: paper, fontSize: 6, fontWeight: "800", letterSpacing: 0.7 },
