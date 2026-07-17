@@ -3023,11 +3023,18 @@ export default function App() {
                     const outside = date.getMonth() !== calendarMonth.getMonth();
                     const selected = key === calendarSelectedDate;
                     const scheduled = calendarCounts.get(key) || 0;
+                    const scheduledEntry = calendarEntries.find((entry) => entry.scheduledDate === key);
+                    const scheduledOutfit = scheduledEntry ? outfitsById.get(scheduledEntry.outfitId) : null;
                     return (
                       <Pressable key={key} style={styles.plannerMonthDay} onPress={() => { setCalendarSelectedDate(key); setCalendarMode("day"); }}>
                         <View style={[styles.plannerMonthDateBadge, selected && styles.plannerMonthDateBadgeSelected]}><Text style={[styles.plannerMonthDate, outside && styles.plannerMonthDateOutside, selected && styles.plannerMonthDateSelected]}>{date.getDate()}</Text></View>
                         <View style={[styles.plannerMonthSlot, outside && styles.plannerMonthSlotOutside, scheduled > 0 && styles.plannerMonthSlotScheduled]}>
-                          <Text style={[styles.plannerMonthSlotText, scheduled > 0 && styles.plannerMonthSlotTextScheduled]}>{scheduled > 0 ? (scheduled > 1 ? String(scheduled) : "✓") : outside ? "" : "＋"}</Text>
+                          {scheduledOutfit ? (
+                            <>
+                              <View style={styles.plannerMonthOutfitPreview}><OutfitVisual outfit={scheduledOutfit} session={cloudSession} localPieceImages={localWardrobeImages} /></View>
+                              {scheduled > 1 && <View style={styles.plannerMonthOutfitCount}><Text style={styles.plannerMonthOutfitCountText}>＋{scheduled - 1}</Text></View>}
+                            </>
+                          ) : <Text style={styles.plannerMonthSlotText}>{outside ? "" : "＋"}</Text>}
                         </View>
                       </Pressable>
                     );
@@ -3865,9 +3872,12 @@ const styles = StyleSheet.create({
   plannerMonthDateSelected: { color: "#FFF", fontWeight: "900" },
   plannerMonthSlot: { flex: 1, width: "100%", alignItems: "center", justifyContent: "center", borderRadius: 7, backgroundColor: "#ECEAE6" },
   plannerMonthSlotOutside: { backgroundColor: "transparent" },
-  plannerMonthSlotScheduled: { backgroundColor: ink },
+  plannerMonthSlotScheduled: { overflow: "hidden", backgroundColor: "#E3DED4" },
   plannerMonthSlotText: { color: "#6F706E", fontSize: 23, fontWeight: "300" },
   plannerMonthSlotTextScheduled: { color: paper, fontSize: 13, fontWeight: "900" },
+  plannerMonthOutfitPreview: { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, overflow: "hidden", backgroundColor: "#E3DED4" },
+  plannerMonthOutfitCount: { position: "absolute", right: 3, top: 3, minWidth: 19, height: 19, alignItems: "center", justifyContent: "center", paddingHorizontal: 4, borderRadius: 10, backgroundColor: "rgba(0,0,0,.78)" },
+  plannerMonthOutfitCountText: { color: "#FFF", fontSize: 7, fontWeight: "900" },
   plannerMonthHint: { color: muted, fontSize: 8, textAlign: "center", marginTop: 12 },
   plannerCostHint: { color: "#AAA49B", fontSize: 7, textAlign: "center", marginTop: 16 },
   calendarPanel: { overflow: "hidden", padding: 10, borderWidth: 1, borderColor: line, borderRadius: 20, backgroundColor: "#F8F5ED" },
