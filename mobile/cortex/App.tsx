@@ -13,6 +13,7 @@ import {
   View,
 } from "react-native";
 import LegacyApp from "../App";
+import ZeroVisionHub from "../zero-vision/ZeroVisionHub";
 import {
   BrandHeader,
   BottomNav,
@@ -103,6 +104,8 @@ export default function VestaCortexApp() {
   const [renderingWeek, setRenderingWeek] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [legacyRoute, setLegacyRoute] = useState<LegacyRoute | null>(null);
+  const [zeroVisionOpen, setZeroVisionOpen] = useState(false);
+  const [zeroVisionTab, setZeroVisionTab] = useState<"garment" | "avatar">("garment");
   const coordinatorRef = useRef<RenderCoordinator | null>(null);
   const planningCancelled = useRef(false);
 
@@ -204,7 +207,8 @@ export default function VestaCortexApp() {
     const ready = snapshot.wardrobe.filter((item) => item.imageKind === "cutout" && (item.imagePath || item.localImageUri));
     if (ready.length < 3) {
       showNotice("Faltan prendas listas", "Importa o termina al menos una base, una parte inferior —o vestido— y calzado.", "error");
-      setLegacyRoute({ view: "closet", action: "import" });
+      setZeroVisionTab("garment");
+      setZeroVisionOpen(true);
       return;
     }
     planningCancelled.current = false;
@@ -255,8 +259,9 @@ export default function VestaCortexApp() {
       return;
     }
     if (!snapshot.avatar) {
-      showNotice("Primero crea tu avatar", "Vesta usará el mismo avatar AI para todas las pruebas y la semana completa.", "error");
-      setLegacyRoute({ view: "profile", action: "avatar" });
+      showNotice("Primero crea tu avatar", "Usa una foto de cuerpo completo para preparar tu avatar.", "error");
+      setZeroVisionTab("avatar");
+      setZeroVisionOpen(true);
       return;
     }
     const job = await coordinatorRef.current?.enqueue(candidate.garmentIds, quality);
@@ -269,7 +274,8 @@ export default function VestaCortexApp() {
   const renderWholeWeek = async () => {
     if (!hydratedPlan || renderingWeek) return;
     if (!snapshot.avatar) {
-      setLegacyRoute({ view: "profile", action: "avatar" });
+      setZeroVisionTab("avatar");
+      setZeroVisionOpen(true);
       return;
     }
     setRenderingWeek(true);
@@ -361,7 +367,7 @@ export default function VestaCortexApp() {
               {planning && planningProgress ? <View style={styles.planningPanel}><ActivityIndicator color={palette.cobalt} /><View style={styles.planningCopy}><Text style={styles.planningTitle}>{planningProgress.label}</Text><View style={styles.planningTrack}><View style={[styles.planningFill, { width: `${Math.round(planningProgress.completed / Math.max(1, planningProgress.total) * 100)}%` }]} /></View></View></View> : null}
               {hydratedPlan ? <>
                 <DayStrip days={hydratedPlan.days} selectedDate={selectedDate} onSelect={setSelectedDate} />
-                <CinematicHero day={selectedDay} imageSource={heroSource} avatarSource={avatarSource} renderJob={heroJob} onRender={renderSelectedDay} onUpgrade={upgradeSelectedDay} onLock={toggleSelectedLock} onRegenerate={regenerateSelectedDay} onOpenLegacy={() => setLegacyRoute({ view: "profile", action: "avatar" })} />
+                <CinematicHero day={selectedDay} imageSource={heroSource} avatarSource={avatarSource} renderJob={heroJob} onRender={renderSelectedDay} onUpgrade={upgradeSelectedDay} onLock={toggleSelectedLock} onRegenerate={regenerateSelectedDay} onOpenLegacy={() => { setZeroVisionTab("avatar"); setZeroVisionOpen(true); }} />
                 <View style={styles.weekActions}><Pressable style={styles.weekRender} onPress={renderWholeWeek} disabled={renderingWeek}><Text style={styles.weekRenderText}>{renderingWeek ? "AÑADIENDO…" : "✦ RENDERIZAR SEMANA"}</Text></Pressable><Pressable style={styles.weekLab} onPress={() => { setTab("lab"); setSelectedDate(selectedDay?.brief.date || selectedDate); }}><Text style={styles.weekLabText}>ABRIR EN LAB</Text></Pressable></View>
                 <WeekPlanPicker plans={plans} selectedId={selectedPlan?.id} onSelect={(plan) => { setSelectedPlanId(plan.id); setBriefs(plan.days.map((day) => day.brief)); }} />
                 <PlanMetrics plan={hydratedPlan} />
@@ -382,6 +388,11 @@ export default function VestaCortexApp() {
           ) : (
             <ScrollView contentContainerStyle={styles.screen} showsVerticalScrollIndicator={false}>
               <View style={styles.titleRow}><View><Text style={styles.eyebrow}>LOCAL PERSONAL STYLE MODEL</Text><Text style={styles.title}>Cortex</Text></View><Text style={styles.modelCount}>{profile.actionCount} señales</Text></View>
+              <Pressable style={styles.zeroVisionCard} onPress={() => { setZeroVisionTab("garment"); setZeroVisionOpen(true); }}>
+                <View style={styles.zeroVisionBadge}><Text style={styles.zeroVisionBadgeText}>◇</Text></View>
+                <View style={styles.zeroVisionCopy}><Text style={styles.zeroVisionEyebrow}>CAPTURA GUIADA</Text><Text style={styles.zeroVisionTitle}>Recorta prendas y prepara tu avatar</Text><Text style={styles.zeroVisionMeta}>Resultados limpios con control de calidad antes de guardar.</Text></View>
+                <Text style={styles.zeroVisionArrow}>›</Text>
+              </Pressable>
               <StyleDNAPanel dna={analysis.styleDNA} profileActions={profile.actionCount} />
               <WardrobeGraphPanel analysis={analysis} onOpenCloset={() => setLegacyRoute({ view: "closet" })} />
               <View style={styles.communityPanel}><Text style={styles.eyebrow}>COMUNIDADES DEL ARMARIO</Text><Text style={styles.sectionTitle}>Clusters que ya existen</Text>{analysis.communities.slice(0, 6).map((community) => <View key={community.id} style={styles.communityRow}><View style={styles.communityIndex}><Text style={styles.communityIndexText}>{community.id + 1}</Text></View><View style={{ flex: 1 }}><Text style={styles.communityLabel}>{community.label}</Text><Text style={styles.communityMeta}>{community.garmentIds.length} prendas conectadas</Text></View></View>)}</View>
@@ -391,6 +402,7 @@ export default function VestaCortexApp() {
           <BottomNav tab={tab} onChange={handleTabChange} />
         </View>
       )}
+      {zeroVisionOpen && session ? <ZeroVisionHub visible initialTab={zeroVisionTab} session={session} onClose={() => setZeroVisionOpen(false)} onChanged={() => refresh(true)} onPaidAvatar={() => { setZeroVisionOpen(false); setLegacyRoute({ view: "profile", action: "avatar" }); }} /> : null}
     </SafeAreaView>
   );
 }
@@ -425,6 +437,14 @@ const styles = StyleSheet.create({
   noPlanMark: { color: palette.lime, fontSize: 86, lineHeight: 92, fontWeight: "900" }, noPlanTitle: { color: palette.white, fontSize: 27, lineHeight: 31, textAlign: "center", fontWeight: "900", marginTop: 15 }, noPlanCopy: { color: "#AEB4BF", fontSize: 9, lineHeight: 15, textAlign: "center", marginTop: 10 }, noPlanButton: { marginTop: 24, paddingHorizontal: 22, paddingVertical: 15, borderRadius: 19, backgroundColor: palette.lime }, noPlanButtonText: { color: palette.ink, fontSize: 7.5, fontWeight: "900" },
   anchorPanel: { marginHorizontal: 16, marginBottom: 16 }, anchorRail: { gap: 8, paddingVertical: 10 }, anchorCard: { width: 102, padding: 7, borderRadius: 18, borderWidth: 1, borderColor: palette.line, backgroundColor: palette.white }, anchorCardActive: { borderColor: palette.cobalt, backgroundColor: palette.cobalt }, anchorImage: { width: "100%", height: 88, borderRadius: 12, backgroundColor: palette.paper }, anchorName: { color: palette.ink, fontSize: 7.5, lineHeight: 10, fontWeight: "800", marginTop: 7 }, anchorNameActive: { color: palette.white }, anchorCheck: { position: "absolute", right: 6, top: 6, width: 22, height: 22, alignItems: "center", justifyContent: "center", borderRadius: 11, backgroundColor: palette.lime }, anchorCheckText: { color: palette.ink, fontSize: 10, fontWeight: "900" },
   feedbackPanel: { marginHorizontal: 16, marginTop: 8, padding: 18, borderRadius: 24, backgroundColor: palette.ink }, feedbackTitle: { color: palette.white, fontSize: 24, fontWeight: "900", marginTop: 4 }, contributionGrid: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginTop: 16 }, contribution: { width: "48.5%", padding: 11, borderRadius: 15, backgroundColor: "#1D2028" }, contributionValue: { color: palette.lime, fontSize: 19, fontWeight: "900" }, contributionLabel: { color: "#AEB4BF", fontSize: 6.5, marginTop: 3 }, feedbackActions: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginTop: 16 }, feedbackButton: { flexGrow: 1, alignItems: "center", paddingHorizontal: 10, paddingVertical: 11, borderRadius: 15, borderWidth: 1, borderColor: "#444A55" }, feedbackButtonAccent: { borderColor: palette.lime, backgroundColor: palette.lime }, feedbackButtonText: { color: palette.white, fontSize: 6.5, fontWeight: "900" }, feedbackButtonTextAccent: { color: palette.ink }, openLegacyButton: { alignItems: "center", marginTop: 10, paddingVertical: 12 }, openLegacyText: { color: "#AEB4BF", fontSize: 6.5, fontWeight: "900", textDecorationLine: "underline" },
+  zeroVisionCard: { flexDirection: "row", alignItems: "center", gap: 13, marginHorizontal: 16, marginBottom: 16, padding: 16, borderRadius: 24, backgroundColor: palette.ink },
+  zeroVisionBadge: { width: 54, height: 54, alignItems: "center", justifyContent: "center", borderRadius: 18, backgroundColor: palette.lime },
+  zeroVisionBadgeText: { color: palette.ink, fontSize: 22, fontWeight: "900", letterSpacing: -1 },
+  zeroVisionCopy: { flex: 1 },
+  zeroVisionEyebrow: { color: palette.lime, fontSize: 6, fontWeight: "900", letterSpacing: 1 },
+  zeroVisionTitle: { color: palette.white, fontSize: 13, lineHeight: 17, fontWeight: "900", marginTop: 4 },
+  zeroVisionMeta: { color: "#AEB4BF", fontSize: 7, lineHeight: 11, marginTop: 4 },
+  zeroVisionArrow: { color: palette.lime, fontSize: 27, fontWeight: "300" },
   modelCount: { color: palette.success, fontSize: 7, fontWeight: "900", paddingHorizontal: 10, paddingVertical: 7, borderRadius: 14, backgroundColor: palette.white },
   communityPanel: { marginHorizontal: 16, marginBottom: 16, padding: 18, borderRadius: 24, backgroundColor: palette.white }, communityRow: { minHeight: 62, flexDirection: "row", alignItems: "center", gap: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.line }, communityIndex: { width: 32, height: 32, alignItems: "center", justifyContent: "center", borderRadius: 11, backgroundColor: palette.cobaltSoft }, communityIndexText: { color: palette.cobalt, fontSize: 11, fontWeight: "900" }, communityLabel: { color: palette.ink, fontSize: 9, fontWeight: "800" }, communityMeta: { color: palette.muted, fontSize: 6.5, marginTop: 3 },
 });

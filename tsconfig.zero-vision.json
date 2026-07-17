@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": false,
+    "allowImportingTsExtensions": true
+  },
+  "include": [
+    "types/zero-vision-cloudflare.d.ts",
+    "lib/zero-vision/**/*.ts",
+    "app/api/v1/garments/zero-cost/route.ts",
+    "app/api/v1/avatar/zero-cost/route.ts",
+    "tests/zero-vision-*.test.ts"
+  ]
+}
