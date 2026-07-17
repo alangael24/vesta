@@ -48,6 +48,16 @@ import {
 } from "./native-next/intelligence";
 
 type ViewName = "home" | "profile" | "closet" | "builder" | "looks" | "calendar" | "wishlist";
+type AppInitialAction = "import" | "avatar" | "create" | "profile";
+type AppProps = {
+  initialView?: ViewName;
+  initialAction?: AppInitialAction;
+  initialGarmentIds?: string[];
+  initialOutfitId?: string;
+  initialGarmentId?: string;
+  autoRenderInitialLook?: boolean;
+  onExit?: () => void;
+};
 type Category = "all" | "tops" | "layers" | "bottoms" | "footwear" | "accessories" | "one_piece";
 type ClosetFilter = "all" | "clothing" | "footwear" | "accessories";
 type ItemId = number | string;
@@ -892,17 +902,25 @@ function productImportErrorMessage(code: string) {
   return "No logramos extraer una imagen de producto utilizable. La tienda y tu armario no fueron modificados.";
 }
 
-export default function App() {
+export default function App({
+  initialView = "home",
+  initialAction,
+  initialGarmentIds = [],
+  initialOutfitId,
+  initialGarmentId,
+  autoRenderInitialLook = false,
+  onExit,
+}: AppProps = {}) {
   const [notice, setNotice] = useState<AppNotice | null>(null);
-  const [view, setView] = useState<ViewName>("home");
+  const [view, setView] = useState<ViewName>(initialView);
   const [filter, setFilter] = useState<ClosetFilter>("all");
-  const [importOpen, setImportOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(initialAction === "import");
   const [linkImportOpen, setLinkImportOpen] = useState(false);
   const [productUrl, setProductUrl] = useState("");
   const [productPlacement, setProductPlacement] = useState<ProductPlacementHint>("auto");
   const [productImporting, setProductImporting] = useState(false);
-  const [profileOpen, setProfileOpen] = useState(false);
-  const [createMenuOpen, setCreateMenuOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(initialAction === "profile");
+  const [createMenuOpen, setCreateMenuOpen] = useState(initialAction === "create");
   const [stylistOpen, setStylistOpen] = useState(false);
   const [studioDirectionSeed, setStudioDirectionSeed] = useState(0);
   const [reviewLoginOpen, setReviewLoginOpen] = useState(false);
@@ -916,7 +934,7 @@ export default function App() {
   const [paywallOpen, setPaywallOpen] = useState(false);
   const [paywallReason, setPaywallReason] = useState<PaywallReason | null>(null);
   const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus | null>(null);
-  const [avatarOpen, setAvatarOpen] = useState(false);
+  const [avatarOpen, setAvatarOpen] = useState(initialAction === "avatar");
   const [avatarSelfie, setAvatarSelfie] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [avatarFullBody, setAvatarFullBody] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [avatarConsent, setAvatarConsent] = useState(false);
@@ -979,6 +997,12 @@ export default function App() {
   const pendingAnalysisOffered = useRef(false);
   const avatarOnboardingOffered = useRef(false);
   const legacyAvatarMigrationStarted = useRef(false);
+  const initialLookApplied = useRef(false);
+  const initialOutfitApplied = useRef(false);
+  const initialGarmentApplied = useRef(false);
+  const initialAutoRenderStarted = useRef(false);
+  const initialAvatarPrompted = useRef(false);
+  const initialPremiumPrompted = useRef(false);
 
   function showNotice(title: string, message?: string, tone: AppNotice["tone"] = "info") {
     setNotice({ id: Date.now(), tone, title, message });
@@ -1012,6 +1036,41 @@ export default function App() {
   }, [selectedItem?.id]);
 
   const activeWardrobe = cloudWardrobe;
+
+  useEffect(() => {
+    if (initialLookApplied.current || !initialGarmentIds.length || !cloudWardrobe.length) return;
+    const byId = new Map(cloudWardrobe.map((item) => [String(item.id), item]));
+    const requested = initialGarmentIds
+      .map((id) => byId.get(String(id)))
+      .filter((item): item is WardrobeItem => Boolean(item?.imagePath && item.imageKind === "cutout"));
+    const compatible = requested.reduce<WardrobeItem[]>((current, item) => {
+      const slot = fittingSlotFor(item);
+      return [...current.filter((existing) => !fittingSlotsConflict(slot, fittingSlotFor(existing))), item];
+    }, []);
+    if (!compatible.length) return;
+    setTryOnLayers(compatible.map((item, index) => ({ key: `${item.id}-vesta-cortex-${index}`, item })));
+    setTryOnSavedOutfitId(null);
+    setView("builder");
+    initialLookApplied.current = true;
+  }, [cloudWardrobe, initialGarmentIds.join("|")]);
+
+  useEffect(() => {
+    if (initialOutfitApplied.current || !initialOutfitId || !outfits.length) return;
+    const target = outfits.find((outfit) => outfit.id === initialOutfitId);
+    if (!target) return;
+    setSelectedOutfit(target);
+    setView("looks");
+    initialOutfitApplied.current = true;
+  }, [outfits, initialOutfitId]);
+
+  useEffect(() => {
+    if (initialGarmentApplied.current || !initialGarmentId || !cloudWardrobe.length) return;
+    const target = cloudWardrobe.find((item) => String(item.id) === initialGarmentId);
+    if (!target) return;
+    setSelectedItem(target);
+    setView("closet");
+    initialGarmentApplied.current = true;
+  }, [cloudWardrobe, initialGarmentId]);
 
   const visibleItems = useMemo(
     () => activeWardrobe.filter((item) => filter === "all"
@@ -2429,6 +2488,41 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (!autoRenderInitialLook || initialAutoRenderStarted.current || !initialLookApplied.current) return;
+    if (!tryOnLayers.length || tryOnRendering || !cloudSession) return;
+    if (!localAvatarUri && !cloudAvatar) {
+      if (!initialAvatarPrompted.current) {
+        initialAvatarPrompted.current = true;
+        setAvatarOpen(true);
+      }
+      return;
+    }
+    if (subscriptionStatus === null) return;
+    if (!subscriptionStatus.active) {
+      if (!initialPremiumPrompted.current) {
+        initialPremiumPrompted.current = true;
+        openPremium("try_on");
+      }
+      return;
+    }
+    initialAutoRenderStarted.current = true;
+    const timeout = setTimeout(() => {
+      renderRealTryOn(tryOnLayers, tryOnLayers, "low").catch(() => {
+        initialAutoRenderStarted.current = false;
+      });
+    }, 180);
+    return () => clearTimeout(timeout);
+  }, [
+    autoRenderInitialLook,
+    tryOnLayers,
+    tryOnRendering,
+    cloudSession?.deviceToken,
+    localAvatarUri,
+    cloudAvatar?.version,
+    subscriptionStatus,
+  ]);
+
+  useEffect(() => {
     if (!pendingTryOn || !cloudSession || tryOnRendering || tryOnResumeStarted.current) return;
     if (pendingTryOn.deviceId !== cloudSession.deviceId) {
       clearTryOnQueue().catch(() => undefined);
@@ -2637,8 +2731,8 @@ export default function App() {
             <Text style={styles.noticeClose}>×</Text>
           </Pressable>
         )}
-        {view !== "calendar" && <View style={styles.topbar}>
-          <Pressable onPress={() => setView("home")} style={styles.brand} accessibilityLabel="Ir a Home">
+        {(view !== "calendar" || Boolean(onExit)) && <View style={styles.topbar}>
+          <Pressable onPress={() => onExit ? onExit() : setView("home")} style={styles.brand} accessibilityLabel={onExit ? "Volver a Vesta Cortex" : "Ir a Home"}>
             <View style={styles.brandMark}><Text style={styles.brandLetter}>V</Text></View>
             <Text style={styles.brandName}>VESTA</Text>
           </Pressable>
